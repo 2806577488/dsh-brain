@@ -89,8 +89,13 @@ export function applyMoodDecay(state, now, options = {}) {
     }
     if (deepNight) {
       reasons[side].push('deep-night')
-      current.energy = clamp01(current.energy - deepEnergy, baseline.energy)
-      current.valence = clamp01(current.valence - deepValence, baseline.valence)
+      // 深夜惩罚只作用于「助手自己」：熬夜干活的是他，不是用户。
+      // 之前对 user 侧也扣 energy，导致用户一整天不说话、凌晨打开 App 时
+      // 被注入「此刻状态：有点累」——依据只是时间过了，不是用户说的任何话。
+      if (side === 'self') {
+        current.energy = clamp01(current.energy - deepEnergy, baseline.energy)
+        current.valence = clamp01(current.valence - deepValence, baseline.valence)
+      }
       changed[side] = true
     }
     if (changed[side]) current.updatedAt = new Date(now).toISOString()
@@ -142,7 +147,8 @@ export function applyMoodRules(state, input, options = {}) {
   if (signals.longInput) user.energy -= 0.02
   if (signals.ids.length === 0) {
     user.valence += (userBaseline.valence - user.valence) * 0.05
-    user.energy += (userBaseline.energy - user.energy) * 0.05
+    // 用户没说话就是「没证据」，应该更快回到基线，而不是被时间拖着往下走。
+    user.energy += (userBaseline.energy - user.energy) * 0.10
     reasons.user.push('resting')
   }
 

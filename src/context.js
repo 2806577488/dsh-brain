@@ -52,7 +52,8 @@ export function describeLevel(value, labels) {
   const number = Number(value)
   if (!Number.isFinite(number)) return labels.mid
   if (number >= 0.68) return labels.high
-  if (number <= 0.36) return labels.low
+  // low 阈值从 0.36 收到 0.30：0.31~0.36 只是「略低」，说成「有点累」证据不足。
+  if (number <= 0.30) return labels.low
   return labels.mid
 }
 
