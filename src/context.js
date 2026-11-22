@@ -340,25 +340,17 @@ export function buildContextText(input) {
     push(`更早的印象：${line(summaries.self.text, 120)}`, 3, 'self')
   }
   if (moodState && moodState.user) {
+    // 不再注入「此刻状态」：用户累不累由用户自己说，不从一个随时间衰减的
+    // 数值替他下结论（工作会话里这行是噪音，还会误导助手去「关心」）。
     stats.mood = true
-    const energy = describeLevel(moodState.user.energy, { high: '精力不错', mid: '精力一般', low: '有点累' })
-    const valence = describeLevel(moodState.user.valence, { high: '心情不错', mid: '心情平稳', low: '心情偏低' })
-    push(`此刻状态：${energy}，${valence}`, 4, 'user')
   }
   if (personaRender && Array.isArray(personaRender.lines?.user)) {
     stats.persona = true
     for (const traitLine of personaRender.lines.user.slice(0, 3)) push(traitLine, 4, 'user')
   }
   if (moodState && moodState.self) {
+    // 助手自己的状态行同样不再注入。
     stats.mood = true
-    const status = typeof moodState.self.status === 'string' && moodState.self.status.length > 0 ? moodState.self.status : '平静'
-    const energy = describeLevel(moodState.self.energy, { high: '精力充沛', mid: '精力一般', low: '有点疲惫' })
-    const affectionWord = describeLevel(moodState.self.affection, {
-      high: '和用户很熟',
-      mid: '和用户相处自然',
-      low: '和用户还在熟悉中',
-    })
-    push(`当前状态：${status}，${energy}，${affectionWord}`, 4, 'self')
   }
   if (personaRender && Array.isArray(personaRender.lines?.self)) {
     stats.persona = true
