@@ -1,0 +1,33 @@
+{
+  "name": "@shenyue/dsh-brain",
+  "version": "2.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DSH-native assistant brain as four independent host plugins: dual-side memory, mood, persona, and automatic system-prompt context assembly.",
+  "license": "MIT",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./plugins/*": "./src/plugins/*.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "src",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "docs",
+    "icon.svg",
+    "README.md",
+    "test"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
+
+

@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "DSH assistant brain",
+    "description": "Four independent host plugins for a DSH assistant's brain: dual-side long-term memory, dual-side mood, persona traits, and automatic system-prompt context assembly with a /brain command.",
+    "detail": "docs/DETAIL.md"
+  }
+}

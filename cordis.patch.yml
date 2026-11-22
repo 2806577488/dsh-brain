@@ -1,0 +1,128 @@
+# DSH 助手大脑（dsh-brain）：bundle 层。
+#
+# 一个包、四个独立 Host 插件行，可单独 enable/disable，各有自己的 config：
+#   dsh-memory   记忆层：双向长期记忆（user 侧=关于用户 / self 侧=关于助手自己）
+#   dsh-mood     情绪层：双向情绪状态机（用户状态 / 助手状态 + 好感度）
+#   dsh-persona  人格收集层：双向倾向（用户沟通风格 / 助手表达倾向）
+#   dsh-context  上下文整理层：把三层整理成自然语言注入 DSH system prompt，并注册 /brain
+#
+# 数据默认写在 %USERPROFILE%\.dsh\dsh-brain\；不监听端口、不依赖桌宠。
+# 这一层在 dsh-base 之后、用户 cordis.patch.yml 之前应用；用户可用同一行 id 覆盖
+# config（后应用者优先，config 整段替换，所以要把需要的字段写全）。
+- insert:
+    - id: dsh-memory
+      name: '@shenyue/dsh-brain/plugins/memory'
+      config:
+        dataDir: ''
+        dbFile: ''
+        enabled: true
+        maxTurns: 60
+        summaryThreshold: 24
+        summaryEnabled: true
+        factExtractInterval: 3
+        factExtractMode: rule
+        maxFactsPerSide: 80
+        maxFactChars: 60
+        writeMarkdown: true
+        # v2.1.0：召回自学习（默认开；false 一键关闭，不写任何 recall_* 表）
+        recallLearningEnabled: true
+        recallLearningMode: rule
+        recallLearningRate: 0.05
+        recallUsefulnessAlpha: 0.3
+        recallFeatureRate: 0.05
+        recallWeightDecayPerDay: 0.95
+        recallMissBoost: 1.5
+        collectSubagents: false
+        excludeSessionIdPattern: pet
+        includeSessions: []
+        maxTextChars: 20000
+        minTextChars: 2
+        # v2.1.0：系统/工具事件只在 true 时落 memory_events（默认只隔离不存）
+        includeSystemEvents: false
+
+    - id: dsh-mood
+      name: '@shenyue/dsh-brain/plugins/mood'
+      config:
+        dataDir: ''
+        dbFile: ''
+        enabled: true
+        moodDecayMinutes: 120
+        historyLimit: 30
+        deepNightEnergyPenalty: 0.05
+        deepNightValencePenalty: 0.02
+        collectSubagents: false
+        excludeSessionIdPattern: pet
+        includeSessions: []
+        maxTextChars: 20000
+        minTextChars: 2
+
+    - id: dsh-persona
+      name: '@shenyue/dsh-brain/plugins/persona'
+      config:
+        dataDir: ''
+        dbFile: ''
+        enabled: true
+        dynamicsEnabled: true
+        baselineUser:
+          directness: 0.5
+          pace: 0.5
+          humor: 0.4
+          detail: 0.5
+        baselineSelf:
+          warmth: 0.6
+          directness: 0.55
+          playfulness: 0.4
+          proactivity: 0.5
+        regressionPerDaySelf: 0.3
+        regressionPerDayUser: 0.12
+        collectSubagents: false
+        excludeSessionIdPattern: pet
+        includeSessions: []
+        maxTextChars: 20000
+        minTextChars: 2
+
+    - id: dsh-context
+      name: '@shenyue/dsh-brain/plugins/context'
+      config:
+        dataDir: ''
+        enabled: true
+        userName: 用户
+        agentName: 助手
+        maxChars: 1800
+        factLimit: 6
+        workingMemoryMaxChars: 1200
+        recallMaxChars: 1200
+        recallLimit: 4
+        turnRecallLimit: 3
+        recallCooldownTurns: 3
+        topicShiftEnabled: true
+        recallTopicTurns: 2
+        includeUser: true
+        includeSelf: true
+        sectionOrder: 100
+        commandEnabled: true
+        debugSection: false
+        # 归档：只对当前 lead 会话开启（其它会话仍关闭）；DSH compaction 保留为安全网
+        archiveEnabled: true
+        archiveAtPercent: 0.05
+        keepRecentTurns: 4
+        archiveMaxTurnsPerBatch: 8
+        archiveMarker: oneline
+        archiveSessionIds:
+          - session-36ba2998-843a-4171-8bab-d4b2d274d6d5
+        archiveDryRun: false
+        # 后台消化（把会话静默压入长期记忆；只读会话，不写会话、不压缩）
+        consolidateEnabled: true
+        consolidateEveryTurns: 4
+        idleConsolidateMs: 90000
+        consolidateMode: rule
+        consolidateMaxTurns: 12
+        consolidateMinTurns: 1
+        consolidateEpisodeMaxChars: 160
+        summaryAppendMaxChars: 600
+        debugConsolidate: false
+
+
+
+
+
