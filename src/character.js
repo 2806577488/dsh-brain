@@ -268,7 +268,7 @@ export function createCharacterStore({ db, log, now = () => new Date().toISOStri
  * @param {{name?: string, evidenceTurns: number, evidenceTexts: string[]}} input.payload
  * @returns {Promise<{ok: boolean, reason?: string, character?: object}>}
  */
-export async function runCharacterStep({ ctx, config = {}, memory, log, mode, payload }) {
+export async function runCharacterStep({ ctx, config = {}, memory, log, mode, payload, sessionId }) {
   const store = memory?.characters?.()
   if (!store) return { ok: false, reason: 'no-store' }
   const name = String(payload?.name ?? '').trim() || store.get()?.name || ''
@@ -290,12 +290,18 @@ export async function runCharacterStep({ ctx, config = {}, memory, log, mode, pa
       messages: request.messages,
       temperature: 0.4,
       maxTokens: 600,
+      ...(typeof sessionId === 'string' && sessionId.length > 0 ? { sessionId } : {}),
     })
     definition = normalizeDefinition(text)
     if (definition.length === 0) throw new Error('模型返回空定义')
     source = 'llm'
   } catch (error) {
-    log?.('character-llm-failed', { mode, message: error?.message ?? String(error) })
+    log?.('character-llm-failed', {
+      mode,
+      message: error?.message ?? String(error),
+      code: error?.code ?? '',
+      status: error?.status ?? null,
+    })
     definition = fallbackDefinition({ name, evidenceTexts, turns })
     source = 'fallback'
   }

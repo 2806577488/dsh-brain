@@ -236,7 +236,7 @@ export function createConsolidator({ ctx, config, log }) {
    * 轮再让模型改写一版。这里**不 await**（模型慢，不能拖住整理），失败只写日志；
    * 同一时刻只跑一个，避免堆积。
    */
-  function maybeUpdateCharacter(memory, turns) {
+  function maybeUpdateCharacter(memory, turns, sessionId) {
     if (config?.characterEnabled === false || characterBusy) return
     if (!memory || typeof memory.characterNeedsRevision !== 'function') return
     const totalTurns = typeof memory.counts === 'function' ? Number(memory.counts().turns) || 0 : 0
@@ -263,6 +263,7 @@ export function createConsolidator({ ctx, config, log }) {
           config,
           memory,
           log,
+          sessionId,
           mode: decision.bootstrap ? 'bootstrap' : 'revise',
           payload: {
             name: typeof memory.characterRow === 'function' ? memory.characterRow()?.name ?? '' : '',
@@ -285,7 +286,7 @@ export function createConsolidator({ ctx, config, log }) {
    * 同样**不 await**、同一时刻只跑一个、失败只写日志；只接受已知对象名，
    * 模型写出的不在名单里的对象一律丢弃。
    */
-  function maybeExtractEntityFacts(memory, turns) {
+  function maybeExtractEntityFacts(memory, turns, sessionId) {
     if (String(config?.entityExtractMode ?? 'rule') !== 'llm') return
     if (entityExtractBusy) return
     if (!memory || typeof memory.entityList !== 'function' || typeof memory.entityResolve !== 'function') return
@@ -314,6 +315,7 @@ export function createConsolidator({ ctx, config, log }) {
           messages: request.messages,
           temperature: 0.2,
           maxTokens: 700,
+          ...(typeof sessionId === 'string' && sessionId.length > 0 ? { sessionId } : {}),
         })
         const parsed = parseEntityExtraction(text)
         let applied = 0
@@ -550,9 +552,9 @@ export function createConsolidator({ ctx, config, log }) {
       }
 
       // v2.2.0：睡眠期顺带维护「我是谁」（不 await：模型慢，不能拖住整理）。
-      maybeUpdateCharacter(memory, turns)
+      maybeUpdateCharacter(memory, turns, sessionId)
       // v2.3.0：睡眠期结构化巩固（把对话抽成对象字段；只受 entityExtractMode 控制）。
-      maybeExtractEntityFacts(memory, turns)
+      maybeExtractEntityFacts(memory, turns, sessionId)
 
       return { ok: true, turns: turns.length, factsAdded: stats.factsAdded, episodeId, summaryChars, salience }
     } catch (error) {

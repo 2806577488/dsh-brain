@@ -92,6 +92,7 @@ function finishOutcome(reason) {
  * @param {number} request.temperature 温度。
  * @param {number} request.maxTokens 输出上限。
  * @param {AbortSignal} request.signal 取消信号。
+ * @param {string} [request.sessionId] 可选：绑定到某个会话（账号型传输可能需要它）。
  */
 export async function* streamCompletion(ctx, request) {
   let call
@@ -126,6 +127,11 @@ export async function* streamCompletion(ctx, request) {
     messages: request.messages,
     system: request.system,
     signal: request.signal,
+    // 账号型传输（deepseek-account）按会话路由；不传 sessionId 时后台调用会在
+    // 传输层直接失败（"DeepSeek Messages transport failed"）。
+    ...(typeof request.sessionId === 'string' && request.sessionId.length > 0
+      ? { sessionId: request.sessionId }
+      : {}),
   }
 
   let usage
