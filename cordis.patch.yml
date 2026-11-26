@@ -111,7 +111,6 @@
         roleEnabled: false
         roleSectionOrder: 90
         role: {}
-        # 归档：只对当前 lead 会话开启（其它会话仍关闭）；DSH compaction 保留为安全网
         # v2.3.0 实体层：后台整理时抽「患者/客户/项目」，本轮提到的对象优先注入。
         entityEnabled: true
         entityLimit: 2
@@ -124,13 +123,17 @@
         # 睡眠期结构化巩固：llm = 后台低频抽「主诉/辨证/处方/复诊」字段；
         # 想省 token 就改回 rule（只存原话片段），off 则完全不抽。
         entityExtractMode: llm
+        # 归档（**默认开启**，这是长会话不爆上下文的主要手段）：把旧轮次从当前上下文换成
+        # 一行标记，原文永久留在 brain.db 的 memory_turns 里。
+        # archiveAtPercent 是**上下文占用比例**（0.5 = 50%）：涨到该比例才动最旧的一批。
+        # 想先观察就先 archiveDryRun: true 跑一轮，日志里会写"本应归档哪几轮"。
         archiveEnabled: true
-        archiveAtPercent: 0.05
+        archiveAtPercent: 0.5
         keepRecentTurns: 4
         archiveMaxTurnsPerBatch: 8
         archiveMarker: oneline
-        archiveSessionIds:
-          - session-36ba2998-843a-4171-8bab-d4b2d274d6d5
+        # 空数组 = 对所有会话生效；要限定范围就填 session id。
+        archiveSessionIds: []
         archiveDryRun: false
         # 后台消化（把会话静默压入长期记忆；只读会话，不写会话、不压缩）
         consolidateEnabled: true

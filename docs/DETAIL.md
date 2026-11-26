@@ -462,8 +462,9 @@ table_info` 检查后 `ALTER TABLE ADD COLUMN`，旧库自动补齐。
 
 - **原文**：`memory_turns` 永久保存（`maxTurns` 是有界环形，默认 60，可调大）；
   归档也不会删它，只是把旧轮次从**会话 surface** 上换成一行标记。
-- **当前上下文（工作记忆）**：会被编辑 —— 召回往里加、归档往外搬。归档默认关闭
-  （`archiveEnabled: false` + `archiveDryRun: true`），要显式打开才生效。
+- **当前上下文（工作记忆）**：会被编辑 —— 召回往里加、归档往外搬。**归档默认开启**
+  （`archiveEnabled: true`，`archiveAtPercent: 0.5` = 上下文涨到 50% 才动，保留最近 4 轮、
+  每批最多 8 轮）；想先观察就把 `archiveDryRun` 设为 `true`，日志会写"本应归档哪几轮"。
 - **不调 DSH 的 `compaction`**，也不写自己的「压缩摘要」去替代原文；episode 只是
   **索引 + 小摘要**。
 
