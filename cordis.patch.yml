@@ -4,7 +4,7 @@
 #   dsh-memory   记忆层：双向长期记忆（user 侧=关于用户 / self 侧=关于助手自己）
 #   dsh-mood     情绪层：双向情绪状态机（用户状态 / 助手状态 + 好感度）
 #   dsh-persona  人格收集层：双向倾向（用户沟通风格 / 助手表达倾向）
-#   dsh-context  上下文整理层：把三层整理成自然语言注入 DSH system prompt，并注册 /brain
+#   dsh-context  工作记忆层（当前上下文）：决定这一轮看到什么 —— 召回 + 归档 + /brain
 #
 # 数据默认写在 %USERPROFILE%\.dsh\dsh-brain\；不监听端口、不依赖桌宠。
 # 这一层在 dsh-base 之后、用户 cordis.patch.yml 之前应用；用户可用同一行 id 覆盖

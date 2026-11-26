@@ -1,5 +1,5 @@
 /**
- * dsh-context：上下文整理层 Host 插件入口。
+ * dsh-context：工作记忆层（当前上下文）Host 插件入口。
  *
  * 「整理」= 记忆的双向搬运，不做压缩、不改会话历史：
  *   1. 后台消化（consolidator）：会话攒够几轮 / 空闲后，把原文静默压入长期记忆
@@ -25,7 +25,7 @@ export const name = 'dsh-context'
 export const inject = ['systemPrompt']
 
 /**
- * 挂载上下文整理层。
+ * 挂载工作记忆层。
  * @param {import('@deepseek-ai/cordis').Context} ctx Host 上下文。
  * @param {unknown} rawConfig 行配置。
  */

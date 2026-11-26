@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "DSH 助手大脑",
-    "description": "把 DSH 助手的大脑拆成 4 个独立 Host 插件：双向长期记忆、双向情绪、人格收集，以及自动注入 system prompt 的上下文整理层（含 /brain 命令）。",
+    "description": "把 DSH 助手的大脑拆成 4 个独立 Host 插件：双向长期记忆、双向情绪、人格收集（这三层是潜意识 / 长期记忆面），以及编辑当前上下文的工作记忆层（召回 + 归档，含 /brain 命令）。",
     "detail": "docs/DETAIL.md"
   }
 }

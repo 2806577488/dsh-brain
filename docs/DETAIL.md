@@ -29,12 +29,17 @@ surface 替换（`session.append(..., { surfaceOp:{op:'replace', startSeq, endSe
 
 ## 四层
 
+三长一短：前三层是**长期记忆面（潜意识）**，第四层是**工作记忆面（表意识 = 当前上下文）**。
+
 | 行 id | 层 | Service | 数据文件 |
 |---|---|---|---|
-| `dsh-memory` | 记忆层 | `brainMemory` | `memory.json`（+ `brain.md` 镜像） |
-| `dsh-mood` | 情绪层 | `brainMood` | `mood.json` |
-| `dsh-persona` | 人格收集层 | `brainPersona` | `persona.json` |
-| `dsh-context` | 上下文整理层 | `brainContext` | 无（读三层 + 写 `brain.log`） |
+| `dsh-memory` | 长期记忆 · 原文/事实/情节 | `brainMemory` | `brain.db`（+ `brain.md` 镜像） |
+| `dsh-mood` | 长期记忆 · 情绪 | `brainMood` | `brain.db` |
+| `dsh-persona` | 长期记忆 · 双向倾向 | `brainPersona` | `brain.db` |
+| `dsh-context` | **工作记忆（当前上下文）** | `brainContext` | 无（读三层 + 写 `brain.log`） |
+
+> 第 4 层不是「往 system prompt 里塞点字」这么窄：它**决定这一轮模型看到什么** ——
+> 召回是往里加，归档是把旧轮次从上下文里搬走（换成一行标记）。原文不归它管，永远不丢。
 
 共同目录：`%USERPROFILE%\.dsh\dsh-brain\`（每层可用 `dataDir` 单独覆盖）。
 
@@ -288,7 +293,7 @@ surface 替换（`session.append(..., { surfaceOp:{op:'replace', startSeq, endSe
 | `/brain who name <名字>` | 改角色名（不产生新版本） |
 | `/brain patient` | 实体层：列出已知对象（类型 + 聊过几轮）（v2.3.0） |
 | `/brain patient <名字>` | 这个对象的档案：带时间要点 + 最近聊到的原文片段 |
-| `/brain consolidate` | 立即对当前会话跑一次后台整理（不压缩、不改会话；失败给中文原因） |
+| `/brain consolidate` | 立即对当前会话跑一次后台整理（不调 compaction、不改原文；失败给中文原因） |
 | `/brain reset confirm` | 重置三层（各自先备份 `*.bak-<ts>`）；缺 `confirm` 会拒绝 |
 
 除 `/brain consolidate` 会触发一次只读整理外，命令只读本地状态；不把内容发给模型。
@@ -453,18 +458,22 @@ table_info` 检查后 `ALTER TABLE ADD COLUMN`，旧库自动补齐。
 
 ### 轮次裁剪（唯一会让原文离库的机制）与「不做压缩」
 
-**注意（v1.2.0 明确的边界）**：上下文整理器**不压缩、不改写、不删除 DSH 会话历史**，
-也不调用 DSH 的 `compaction`。它只读会话并把内容整理进长期记忆。记忆层自己的
-`memory_turns` 是**有界环形**（`maxTurns`，默认 60）：
+**边界要说准**（v2.0.0 起）：编辑器会改「当前上下文」，但**不改写原文**。
 
-- 每写入一轮，若行数超过 `maxTurns`，同事务内 `DELETE` 最旧的若干行（按 rowid）；
-- 在这之前，事实/情节/摘要已经由后台消化写进长期记忆，且 episode 的 `turn_ids` 可能指向
-  已被裁剪的原文——此时 `fetchTurn(id)` 返回 undefined 是预期行为（原文超出环形上限）；
-- 不做强制 `VACUUM`（WAL 模式下由 SQLite 自行 checkpoint，必要时可手工 `VACUUM`）；
-- `/brain reset confirm` 会在重置前用 `VACUUM INTO` 生成 `brain.db.bak-<ts>` 备份。
+- **原文**：`memory_turns` 永久保存（`maxTurns` 是有界环形，默认 60，可调大）；
+  归档也不会删它，只是把旧轮次从**会话 surface** 上换成一行标记。
+- **当前上下文（工作记忆）**：会被编辑 —— 召回往里加、归档往外搬。归档默认关闭
+  （`archiveEnabled: false` + `archiveDryRun: true`），要显式打开才生效。
+- **不调 DSH 的 `compaction`**，也不写自己的「压缩摘要」去替代原文；episode 只是
+  **索引 + 小摘要**。
 
-如果用户要求「一句都不许丢」，把 `maxTurns` 调大（例如 500）即可；v1.2.0 不引入任何
-「压缩成一句话」的路径，episode 只是**索引 + 小摘要**，不会替代原文。
+`memory_turns` 满了之后（超过 `maxTurns`）才会删最旧的若干行：删除前，事实/情节/摘要
+已经由后台消化写进长期记忆；此时 episode 的 `turn_ids` 指向已裁剪原文、
+`fetchTurn(id)` 返回 undefined 是预期行为。不做强制 `VACUUM`；`/brain reset confirm`
+会在重置前用 `VACUUM INTO` 生成 `brain.db.bak-<ts>` 备份。
+
+如果要求「一句都不许丢」，把 `maxTurns` 调大（例如 500）即可；本包不引入任何
+「压缩成一句话」的路径。
 
 ### 为什么不用 `storageDomain`
 
