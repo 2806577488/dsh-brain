@@ -906,29 +906,28 @@ export function createContextService({ ctx, config, log }) {
       log('section-registered', { instanceId, name: SECTION_NAME, order: config.sectionOrder, maxChars: config.maxChars })
 
       // v2.2.0：角色段（模型写出的自我定义，慢变）放在静态规范与动态上下文之间。
+      //
+      // **无条件注册**：bootstrap 发生在注册之后（第一次后台整理才写第一版）。
+      // 早先版本在注册时检查「已有定义」，结果本轮永远挂不上这一段，必须重启才生效。
+      // 文本回调是现算的：没定义时返回空串，不会注入空段。
       if (config.characterEnabled) {
-        const selfText = characterSectionText()
-        if (selfText.length > 0) {
-          try {
-            disposers.push(
-              systemPrompt.section({
-                name: CHARACTER_SECTION_NAME,
-                order: config.characterSectionOrder,
-                text: () => characterSectionText(),
-              }),
-            )
-            characterRegistered = true
-            log('character-section-registered', {
-              instanceId,
+        try {
+          disposers.push(
+            systemPrompt.section({
               name: CHARACTER_SECTION_NAME,
               order: config.characterSectionOrder,
-              chars: selfText.length,
-            })
-          } catch (error) {
-            log('character-section-failed', { instanceId, message: error?.message ?? String(error) })
-          }
-        } else {
-          log('character-section-skip', { reason: '角色还没有定义（等 bootstrap）' })
+              text: () => characterSectionText(),
+            }),
+          )
+          characterRegistered = true
+          log('character-section-registered', {
+            instanceId,
+            name: CHARACTER_SECTION_NAME,
+            order: config.characterSectionOrder,
+            chars: characterSectionText().length,
+          })
+        } catch (error) {
+          log('character-section-failed', { instanceId, message: error?.message ?? String(error) })
         }
       }
 

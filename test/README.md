@@ -6,10 +6,26 @@
 
 ```powershell
 $node = 'C:\Users\Administrator\.dsh\dsh-runtimes\dsh-next-primary-runtime\dependencies\node\bin\node.exe'
-& $node test\smoke.mjs
+& $node test\smoke.mjs      # 149 项：存储/采集/记忆/情绪/人格/上下文/命令/降级
+& $node test\e2e.mjs        # 14 项：整理→角色 bootstrap→实体抽取→注入 全链路
+& $node test\entity.test.mjs      # 22 项：实体层（抽取/关联/扩散/槽位/结构化字段）
+& $node test\character.test.mjs   # 10 项：角色层（版本化存储/降级）
+& $node test\role.test.mjs        # 11 项：域角色（通用规范）
 ```
 
-覆盖（67 条断言，当前全过；跑完自动删除临时目录）：
+## 端到端（v2.3.0，`test/e2e.mjs`）
+
+假模型按 system prompt 判断"这次是谁在调"（角色 / 实体抽取 / 摘要 / 情节），
+然后把整条链跑一遍：
+
+- 两轮医患对话 → `turn/end` 触发后台整理；
+- 整理顺带 bootstrap 角色（模型写「我是谁」）、结构化抽取患者字段（主诉/处方）；
+- 再算注入：`【我是谁】` + `【当前对象 · 张三】` 都在，且角色段 order 在上下文段之前；
+- 表意识槽位：「他今天怎么样」接回张三；激活扩散：提到张三时带出李四。
+
+**这组测试证明"不装也能验证"**：插件装进 profile 前，整条链已经在这个假 Host 上跑通过。
+
+覆盖（149 条断言，当前全过；跑完自动删除临时目录）：
 
 ## SQLite 存储（v1.1.0 新增）
 
