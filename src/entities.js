@@ -37,6 +37,83 @@ export const ENTITY_KINDS = Object.freeze({
   宠物: 'pet',
 })
 
+/**
+ * 结构化字段的白名单（v2.3.0「睡眠期巩固」用）。
+ *
+ * 规则抽取只能记住"原话片段"；真正有用的是字段化的东西：主诉、辨证、方药、复诊。
+ * 这些由后台的低频 LLM 抽取，这里约束它只许写这几类，避免模型自由发挥出一堆没人看的键。
+ */
+export const ENTITY_FACT_KINDS = Object.freeze([
+  '主诉',
+  '症状',
+  '辨证',
+  '治法',
+  '处方',
+  '医嘱',
+  '复诊',
+  '检查',
+  '过敏',
+  '备注',
+])
+
+/** 结构化抽取的 system prompt。 */
+export const ENTITY_EXTRACT_PROMPT = [
+  '你在后台整理一段医患/客户对话里的对象要点。给你若干轮对话和一份已知对象名单。',
+  '只输出一个 JSON 对象，不要 Markdown：',
+  '{"entities":[{"name":"张三","facts":[{"kind":"主诉","text":"咳嗽三天，夜间加重"},{"kind":"处方","text":"止嗽散加减：紫菀10g、百部10g"}]}]}',
+  `kind 只能取：${ENTITY_FACT_KINDS.join(' / ')}。`,
+  '要求：只写对话里明确出现的信息；每条 ≤ 40 字；不确定就不写；',
+  'name 必须来自给定名单；没有可整理的返回 {"entities":[]}。',
+].join('\n')
+
+/** 组装结构化抽取的 messages（纯函数）。 */
+export function buildEntityExtractMessages({ turns = [], names = [] } = {}) {
+  const body = [
+    `已知对象：${names.join('、')}`,
+    '',
+    '对话：',
+    ...turns.slice(0, 12).map((turn, index) => {
+      const user = flatten(turn?.user ?? '', 300)
+      const assistant = flatten(turn?.assistant ?? '', 300)
+      return `${index + 1}. 用户：${user}\n   助手：${assistant}`
+    }),
+  ].join('\n')
+  return { system: ENTITY_EXTRACT_PROMPT, messages: [{ role: 'user', content: body }] }
+}
+
+/** 解析模型返回的抽取 JSON（失败返回空数组，绝不抛）。 */
+export function parseEntityExtraction(text) {
+  const raw = String(text ?? '').replace(/```[a-zA-Z]*\n?/g, '')
+  const start = raw.indexOf('{')
+  const end = raw.lastIndexOf('}')
+  if (start < 0 || end <= start) return []
+  let decoded
+  try {
+    decoded = JSON.parse(raw.slice(start, end + 1))
+  } catch {
+    return []
+  }
+  if (!decoded || typeof decoded !== 'object' || !Array.isArray(decoded.entities)) return []
+  const out = []
+  for (const item of decoded.entities) {
+    if (!item || typeof item !== 'object') continue
+    const name = String(item.name ?? '').trim()
+    if (name.length === 0) continue
+    const facts = []
+    for (const fact of Array.isArray(item.facts) ? item.facts : []) {
+      if (!fact || typeof fact !== 'object') continue
+      const kindRaw = String(fact.kind ?? '').trim()
+      const kind = ENTITY_FACT_KINDS.includes(kindRaw) ? kindRaw : '备注'
+      const factText = flatten(fact.text ?? '', 120)
+      if (factText.length === 0) continue
+      facts.push({ kind, text: factText })
+      if (facts.length >= 8) break
+    }
+    if (facts.length > 0) out.push({ name, facts })
+  }
+  return out
+}
+
 /** 敬称后缀 → 该后缀不算名字的一部分。 */
 const HONORIFICS = ['先生', '女士', '老师', '阿姨', '叔叔', '伯伯', '婶婶', '大姐', '大哥', '哥', '姐']
 
@@ -559,6 +636,34 @@ export function createEntityStore({ db, log, now = () => new Date().toISOString(
     return { profiles, viaFocus, related: relatedList }
   }
 
+  /**
+   * 应用结构化抽取结果（v2.3.0 睡眠期巩固）。
+   *
+   * 只接受已知对象（名单由调用方给），同文本去重；`kind` 不在白名单里的一律落「备注」。
+   * @returns {number} 新增字段条数
+   */
+  function applyExtraction(name, items) {
+    const entity = findByName(name)
+    if (!entity) return 0
+    const existing = new Set(facts(entity.id, 500).map((row) => row.text))
+    let created = 0
+    for (const fact of Array.isArray(items) ? items : []) {
+      if (!fact || typeof fact !== 'object') continue
+      const factText = flatten(fact.text ?? '', 120)
+      if (factText.length === 0 || existing.has(factText)) continue
+      const kind = ENTITY_FACT_KINDS.includes(String(fact.kind ?? '').trim())
+        ? String(fact.kind).trim()
+        : '备注'
+      const id = addFact(entity.id, { kind, text: factText })
+      if (id) {
+        created += 1
+        existing.add(factText)
+      }
+    }
+    if (created > 0) log?.('entity-facts-added', { name: entity.name, created })
+    return created
+  }
+
   return {
     list,
     get,
@@ -575,5 +680,6 @@ export function createEntityStore({ db, log, now = () => new Date().toISOString(
     rememberFocus,
     focusEntities,
     resolveForTurn,
+    applyExtraction,
   }
 }

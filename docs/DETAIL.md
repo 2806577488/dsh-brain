@@ -374,6 +374,7 @@ surface 替换（`session.append(..., { surfaceOp:{op:'replace', startSeq, endSe
 | `entityFactLimit` / `entityTurnLimit` | `6` / `3` | 每个对象注入几条要点 / 几条"最近聊到" |
 | `entitySpreadEnabled` | `true` | 激活扩散：列出与当前对象同段出现过的其他对象 |
 | `entityFocusTtlMinutes` | `30` | 表意识槽位 TTL：隔这么久再提「他」不再接旧对象 |
+| `entityExtractMode` | `rule` | 睡眠期结构化巩固：`rule`=只存原话片段 / `llm`=抽主诉·辨证·处方等字段 / `off`=关闭 |
 
 #### `role`（v2.2.0 域角色层）
 

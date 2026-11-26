@@ -185,6 +185,11 @@ export const DEFAULT_CONTEXT_CONFIG = Object.freeze({
   entitySpreadEnabled: true,
   /** 表意识槽位 TTL（分钟）：隔这么久再提「他」，不再接回上一个对象。 */
   entityFocusTtlMinutes: 30,
+  /**
+   * 睡眠期结构化巩固：`rule` = 只存原话片段（默认，零模型调用）；
+   * `llm` = 让后台低频抽取「主诉 / 辨证 / 处方 / 复诊」这些字段；`off` = 完全关闭实体层抽取。
+   */
+  entityExtractMode: 'rule',
   /** 是否注册 /brain 命令。 */
   commandEnabled: true,
   /** 诊断：每次 sectionText() 被调用时写 section-text 日志（默认关）。 */
@@ -407,6 +412,9 @@ export function normalizeContextConfig(raw) {
         1,
         1440,
       ),
+      entityExtractMode: ['rule', 'llm', 'off'].includes(String(input.entityExtractMode ?? '').trim())
+        ? String(input.entityExtractMode).trim()
+        : DEFAULT_CONTEXT_CONFIG.entityExtractMode,
       commandEnabled: booleanOr(input.commandEnabled, DEFAULT_CONTEXT_CONFIG.commandEnabled),
       debugSection: booleanOr(input.debugSection, DEFAULT_CONTEXT_CONFIG.debugSection),
       consolidateEnabled: booleanOr(input.consolidateEnabled, DEFAULT_CONTEXT_CONFIG.consolidateEnabled),

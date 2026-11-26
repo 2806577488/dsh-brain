@@ -19,6 +19,7 @@
 
 import { completeText, resolveRoute } from './llm.js'
 import { runCharacterStep } from './character.js'
+import { buildEntityExtractMessages, parseEntityExtraction } from './entities.js'
 import { isNoiseTurn } from './memory.js'
 import { CONSOLIDATE_SYSTEM_PROMPT } from './prompts.js'
 import { clamp01, oneLine } from './store.js'
@@ -215,6 +216,8 @@ export function createConsolidator({ ctx, config, log }) {
   let memoryMissingLogged = false
   /** 角色修订同一时刻只跑一个（模型调用慢，避免攒一堆排队）。 */
   let characterBusy = false
+  /** 实体结构化抽取同一时刻只跑一个。 */
+  let entityExtractBusy = false
 
   /** 取记忆层服务（动态，允许单独停用记忆层）。 */
   function getMemory() {
@@ -272,6 +275,57 @@ export function createConsolidator({ ctx, config, log }) {
       .catch((error) => log('character-step-failed', { message: error?.message ?? String(error) }))
       .finally(() => {
         characterBusy = false
+      })
+  }
+
+  /**
+   * v2.3.0：睡眠期结构化巩固 —— 把对话抽成「主诉 / 辨证 / 处方 / 复诊」这类字段。
+   *
+   * 规则抽取只能存原话片段；字段化必须靠一次低频 LLM（`entityExtractMode: 'llm'`）。
+   * 同样**不 await**、同一时刻只跑一个、失败只写日志；只接受已知对象名，
+   * 模型写出的不在名单里的对象一律丢弃。
+   */
+  function maybeExtractEntityFacts(memory, turns) {
+    if (String(config?.entityExtractMode ?? 'rule') !== 'llm') return
+    if (entityExtractBusy) return
+    if (!memory || typeof memory.entityList !== 'function' || typeof memory.entityResolve !== 'function') return
+    const roster = memory.entityList(50)
+    if (!Array.isArray(roster) || roster.length === 0) return
+    const names = roster.map((entity) => entity.name).filter((name) => typeof name === 'string' && name.length > 0)
+    if (names.length === 0) return
+    const mentioned = new Set()
+    for (const turn of Array.isArray(turns) ? turns : []) {
+      const text = `${turn.user ?? ''}\n${turn.assistant ?? ''}`
+      for (const entity of memory.entityResolve(text, 5)) {
+        if (names.includes(entity.name)) mentioned.add(entity.name)
+      }
+    }
+    const targets = [...mentioned]
+    if (targets.length === 0) return
+
+    entityExtractBusy = true
+    Promise.resolve()
+      .then(async () => {
+        const route = resolveRoute(ctx, config)
+        const request = buildEntityExtractMessages({ turns: turns.slice(-12), names: targets })
+        const text = await completeText(ctx, {
+          route,
+          system: request.system,
+          messages: request.messages,
+          temperature: 0.2,
+          maxTokens: 700,
+        })
+        const parsed = parseEntityExtraction(text)
+        let applied = 0
+        for (const item of parsed) {
+          if (!targets.includes(item.name)) continue
+          applied += Number(memory.entityApplyExtraction?.(item.name, item.facts)) || 0
+        }
+        log('entity-extract-done', { targets: targets.length, parsed: parsed.length, applied })
+      })
+      .catch((error) => log('entity-extract-failed', { message: error?.message ?? String(error) }))
+      .finally(() => {
+        entityExtractBusy = false
       })
   }
 
@@ -497,6 +551,8 @@ export function createConsolidator({ ctx, config, log }) {
 
       // v2.2.0：睡眠期顺带维护「我是谁」（不 await：模型慢，不能拖住整理）。
       maybeUpdateCharacter(memory, turns)
+      // v2.3.0：睡眠期结构化巩固（把对话抽成对象字段；只受 entityExtractMode 控制）。
+      maybeExtractEntityFacts(memory, turns)
 
       return { ok: true, turns: turns.length, factsAdded: stats.factsAdded, episodeId, summaryChars, salience }
     } catch (error) {

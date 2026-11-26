@@ -10,10 +10,12 @@ import path from 'node:path'
 
 import { acquireDatabase } from '../src/db.js'
 import {
+  buildEntityExtractMessages,
   createEntityStore,
   extractEntityCandidates,
   kindLabelOf,
   normalizeEntityName,
+  parseEntityExtraction,
   renderEntitySection,
 } from '../src/entities.js'
 
@@ -186,6 +188,47 @@ check('resolveForTurn：点名优先，没点名用焦点', () => {
 check('相关对象只在开的时侯出现（spread=false 关闭扩散）', () => {
   const plain = store.resolveForTurn({ sessionId: 'sess-r2', text: '张三今天复诊', spread: false })
   assert.deepEqual(plain.related, [])
+})
+
+// ---- 4. 睡眠期结构化巩固（v2.3.0） ----------------------------------------
+check('结构化抽取 prompt：给名单、限字段', () => {
+  const request = buildEntityExtractMessages({
+    turns: [{ user: '患者张三咳嗽三天', assistant: '开了止嗽散' }],
+    names: ['张三'],
+  })
+  assert.ok(request.system.includes('主诉'))
+  assert.ok(request.system.includes('处方'))
+  assert.equal(request.messages.length, 1)
+  assert.ok(request.messages[0].content.includes('张三'))
+  assert.ok(request.messages[0].content.includes('止嗽散'))
+})
+
+check('解析抽取结果：容错 + kind 白名单兜底', () => {
+  const parsed = parseEntityExtraction(
+    '```json\n{"entities":[{"name":"张三","facts":[{"kind":"主诉","text":"咳嗽三天"},{"kind":"乱写","text":"开了三剂"}]}]}\n```',
+  )
+  assert.equal(parsed.length, 1)
+  assert.equal(parsed[0].name, '张三')
+  assert.deepEqual(parsed[0].facts[0], { kind: '主诉', text: '咳嗽三天' })
+  assert.equal(parsed[0].facts[1].kind, '备注', '白名单外的 kind 落备注')
+  assert.deepEqual(parseEntityExtraction('不是 JSON'), [])
+  assert.deepEqual(parseEntityExtraction('{"entities":"x"}'), [])
+})
+
+check('写回档案：只认已知对象、同文本去重', () => {
+  const created = store.applyExtraction('张三', [
+    { kind: '主诉', text: '咳嗽三天，夜间加重' },
+    { kind: '处方', text: '止嗽散加减' },
+  ])
+  assert.equal(created, 2)
+  const again = store.applyExtraction('张三', [{ kind: '主诉', text: '咳嗽三天，夜间加重' }])
+  assert.equal(again, 0, '同文本不重复写')
+  assert.equal(store.applyExtraction('查无此人', [{ kind: '主诉', text: 'x' }]), 0, '不在名单里的对象不建')
+
+  const profile = store.profile(store.findByName('张三').id)
+  const kinds = profile.facts.map((item) => item.kind)
+  assert.ok(kinds.includes('主诉'))
+  assert.ok(kinds.includes('处方'))
 })
 
 handle.release?.()

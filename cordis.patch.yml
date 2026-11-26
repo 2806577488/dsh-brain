@@ -121,6 +121,9 @@
         # 激活扩散 + 表意识槽位（"他今天怎么样"也能接上）
         entitySpreadEnabled: true
         entityFocusTtlMinutes: 30
+        # 睡眠期结构化巩固：llm = 后台低频抽「主诉/辨证/处方/复诊」字段；
+        # 想省 token 就改回 rule（只存原话片段），off 则完全不抽。
+        entityExtractMode: llm
         archiveEnabled: true
         archiveAtPercent: 0.05
         keepRecentTurns: 4

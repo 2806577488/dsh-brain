@@ -1852,6 +1852,14 @@ export function createMemoryService({ ctx, config, log, dir }) {
         .map((entity) => store.profile(entity.id, { factLimit, turnLimit }))
         .filter(Boolean)
     },
+    /**
+     * v2.3.0 睡眠期结构化巩固：把模型抽出的字段（主诉 / 辨证 / 处方 / 复诊…）
+     * 写进对象档案。只接受已知对象，同文本去重。
+     */
+    entityApplyExtraction(name, items) {
+      const store = service.entities()
+      return store ? store.applyExtraction(name, items) : 0
+    },
     getLastSeq,
     setLastSeq,
     getPending,
