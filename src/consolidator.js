@@ -310,6 +310,7 @@ export function createConsolidator({ ctx, config, log }) {
         const route = resolveRoute(ctx, config)
         const request = buildEntityExtractMessages({ turns: turns.slice(-12), names: targets })
         const text = await completeText(ctx, {
+          config,
           route,
           system: request.system,
           messages: request.messages,
@@ -400,6 +401,7 @@ export function createConsolidator({ ctx, config, log }) {
     try {
       const route = resolveRoute(ctx, {})
       const output = await completeText(ctx, {
+        config,
         route,
         system: CONSOLIDATE_SYSTEM_PROMPT,
         messages: [

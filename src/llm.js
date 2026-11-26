@@ -185,16 +185,75 @@ export async function* streamCompletion(ctx, request) {
 }
 
 /**
+ * 后台调用的**路由候选链**：先按配置/当前选择，再把其它已注册 provider 作为备选。
+ *
+ * 为什么需要：`deepseek-account` 是账号登录态传输，后台宿主调用它会 502 TRANSPORT
+ * （"DeepSeek Messages transport failed"）；`deepseek-official` 这类 API Key 路由
+ * 才是插件能用的通道。这里不猜模型名，用 `llm.listModels()` 拿每个 provider 的首个模型。
+ *
+ * @param {import('@deepseek-ai/cordis').Context} ctx Host 上下文。
+ * @param {object} config 归一化配置。
+ * @returns {Promise<Array<{provider: string, model: string}>>}
+ */
+export async function resolveRouteChain(ctx, config = {}) {
+  const primary = resolveRoute(ctx, config)
+  const chain = [primary]
+  try {
+    const llm = ctx.get('llm')
+    const providers = typeof llm?.listProviders === 'function' ? llm.listProviders() : []
+    for (const item of Array.isArray(providers) ? providers : []) {
+      const id = typeof item === 'string' ? item : item?.id
+      if (!id || id === primary.provider) continue
+      let model = ''
+      try {
+        const models = await llm.listModels(id)
+        model = models?.[0]?.id ?? ''
+      } catch {
+        model = ''
+      }
+      if (typeof model === 'string' && model.length > 0) chain.push({ provider: id, model })
+    }
+  } catch {
+    // 发现失败就只用首选路由
+  }
+  return chain
+}
+
+/** 这个错误值不值得换下一个路由重试（传输/5xx/流失败）。 */
+function isRouteRetryable(error) {
+  const code = String(error?.code ?? '')
+  if (code === 'TRANSPORT' || code === 'LLM_STREAM_FAILED' || code === 'LLM_PREPARE_FAILED') return true
+  const status = Number(error?.status)
+  return Number.isFinite(status) && status >= 500
+}
+
+/**
  * 非流式的便捷封装：把流式事件收成完整文本。
+ *
+ * 会在候选路由链上**逐个尝试**：首选路由（用户当前选择）失败且属于传输类错误时，
+ * 自动换下一个 provider 再试一次。全部失败才抛最后一个错误。
  * @param {import('@deepseek-ai/cordis').Context} ctx Host 上下文。
  * @param {Parameters<typeof streamCompletion>[1]} request 调用参数。
  * @returns {Promise<string>}
  */
 export async function completeText(ctx, request) {
-  const parts = []
-  for await (const event of streamCompletion(ctx, request)) {
-    if (event.kind === 'text') parts.push(event.text)
-    else if (event.kind === 'finish' && event.error) throw event.error
+  const chain = Array.isArray(request.routes) && request.routes.length > 0
+    ? request.routes
+    : await resolveRouteChain(ctx, request.config ?? {})
+  let lastError
+  for (const route of chain) {
+    try {
+      const parts = []
+      for await (const event of streamCompletion(ctx, { ...request, route })) {
+        if (event.kind === 'text') parts.push(event.text)
+        else if (event.kind === 'finish' && event.error) throw event.error
+      }
+      return parts.join('')
+    } catch (error) {
+      lastError = error
+      lastError.triedRoutes = chain.length
+      if (!isRouteRetryable(error)) throw error
+    }
   }
-  return parts.join('')
+  throw lastError ?? new BridgeLlmError('没有可用的模型路由', { code: 'NO_ROUTE', status: 502 })
 }

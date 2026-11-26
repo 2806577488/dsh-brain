@@ -285,6 +285,7 @@ export async function runCharacterStep({ ctx, config = {}, memory, log, mode, pa
   try {
     const route = resolveRoute(ctx, config)
     const text = await completeText(ctx, {
+      config,
       route,
       system: request.system,
       messages: request.messages,
