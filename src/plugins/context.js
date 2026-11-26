@@ -42,6 +42,24 @@ export function apply(ctx, rawConfig) {
   service.attachArchiver(archiver)
   ctx.provide('brainContext', service)
 
+  // 诊断：记录当前可用的模型路由。后台低频调用（角色/字段抽取/摘要）只能走这里；
+  // 没有可用路由时就只能落到规则兜底，先把事实写进日志再谈修。
+  try {
+    const llm = ctx.get('llm')
+    const providers = typeof llm?.listProviders === 'function' ? llm.listProviders() : []
+    const modelService = ctx.get('agentDefaultModel')
+    const selection =
+      typeof modelService?.currentSelection === 'function' ? modelService.currentSelection() : null
+    log('llm-routes', {
+      providers: Array.isArray(providers)
+        ? providers.map((item) => item?.id ?? String(item))
+        : [],
+      selection: selection ?? null,
+    })
+  } catch (error) {
+    log('llm-routes-failed', { message: error?.message ?? String(error) })
+  }
+
   if (config.enabled) {
     try {
       const dispose = service.registerPromptSection()

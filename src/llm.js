@@ -78,6 +78,16 @@ function finishOutcome(reason) {
   }
 }
 
+/** 把 `content: '文本'` 归一化成 blocks 形态（DSH 的消息契约是 blocks 数组）。 */
+function normalizeMessages(messages) {
+  if (!Array.isArray(messages)) return []
+  return messages.map((message) => {
+    if (!message || typeof message !== 'object') return message
+    if (typeof message.content !== 'string') return message
+    return { ...message, content: [{ type: 'text', text: message.content }] }
+  })
+}
+
 /**
  * 流式调用一次模型。
  *
@@ -124,7 +134,7 @@ export async function* streamCompletion(ctx, request) {
 
   const options = {
     ...call.config,
-    messages: request.messages,
+    messages: normalizeMessages(request.messages),
     system: request.system,
     signal: request.signal,
     // 账号型传输（deepseek-account）按会话路由；不传 sessionId 时后台调用会在
@@ -165,6 +175,9 @@ export async function* streamCompletion(ctx, request) {
 
   const outcome = finishOutcome(finish)
   if (outcome.error) {
+    // 把路由信息带到错误上：失败日志里能直接看到是哪个 provider/model 出的问题。
+    outcome.error.provider = request.route?.provider ?? ''
+    outcome.error.model = request.route?.model ?? ''
     yield { kind: 'finish', error: outcome.error }
     return
   }

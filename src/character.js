@@ -301,6 +301,8 @@ export async function runCharacterStep({ ctx, config = {}, memory, log, mode, pa
       message: error?.message ?? String(error),
       code: error?.code ?? '',
       status: error?.status ?? null,
+      provider: error?.provider ?? '',
+      model: error?.model ?? '',
     })
     definition = fallbackDefinition({ name, evidenceTexts, turns })
     source = 'fallback'
