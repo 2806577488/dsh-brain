@@ -25,11 +25,17 @@ import {
   judgeAttribution,
   splitTerms,
 } from './learning.js'
+import { buildRoleText, roleSummary, ROLE_SECTION_NAME } from './role.js'
+import { renderCharacterSection, runCharacterStep } from './character.js'
+import { renderEntitySection } from './entities.js'
 import { classifyMessage } from './roles.js'
 import { oneLine } from './store.js'
 
 /** 注入段的默认名字与排序位置（可用 config.sectionOrder 覆盖）。 */
 export const SECTION_NAME = 'dsh-brain:context'
+
+/** v2.2.0：角色段（"我是谁"，模型从对话里写出来的自我定义）。 */
+export const CHARACTER_SECTION_NAME = 'dsh-brain:self'
 
 /** 工作记忆段的标题（召回内容统一挂在这里）。 */
 export const WORK_MEMORY_HEADER = '【工作记忆 · 相关回忆】（只在你自然用得上的时候提，不要复述）'
@@ -176,6 +182,32 @@ export function buildContextText(input) {
     memory && typeof memory.factsForPrompt === 'function' ? memory.factsForPrompt('self', userText, factLimit) : []
   const summaries = memory && typeof memory.summaries === 'function' ? memory.summaries() : undefined
   const profile = memory && typeof memory.profile === 'function' ? memory.profile() : undefined
+
+  // ---- v2.3.0：实体优先 + 表意识槽位 + 激活扩散 ----
+  // 本轮点了名就用它；没点名就用本会话最近焦点（「他今天怎么样」）；再顺带给出相关对象。
+  let entityProfiles = []
+  let entityRelated = []
+  let entityViaFocus = false
+  if (config.entityEnabled !== false && memory && typeof memory.entityResolveForTurn === 'function') {
+    try {
+      const resolved = memory.entityResolveForTurn({
+        sessionId: input?.sessionId,
+        text: userText,
+        limit: Math.max(1, Number(config.entityLimit ?? 2)),
+        factLimit: Math.max(1, Number(config.entityFactLimit ?? 6)),
+        turnLimit: Math.max(1, Number(config.entityTurnLimit ?? 3)),
+        ttlMs: Math.max(60, Number(config.entityFocusTtlMinutes ?? 30)) * 60 * 1000,
+        spread: config.entitySpreadEnabled !== false,
+      })
+      entityProfiles = resolved?.profiles ?? []
+      entityRelated = resolved?.related ?? []
+      entityViaFocus = resolved?.viaFocus === true
+    } catch {
+      entityProfiles = []
+    }
+  }
+  stats.entities = entityProfiles.length
+  stats.entityViaFocus = entityViaFocus
 
   // ---- 检索查询：本轮输入 + 最近 1–2 轮（扩展召回面）----
   const query = [userText, ...(Array.isArray(recentUserTexts) ? recentUserTexts : [])]
@@ -384,6 +416,13 @@ export function buildContextText(input) {
 
   // ---- 渲染 ----
   const sections = []
+  // v2.3.0：实体优先（本轮提到的对象档案）放在最前面 —— 预算不够时先保它。
+  const entitySection = renderEntitySection(entityProfiles, {
+    maxChars: Math.max(80, Number(config.entityMaxChars ?? 400)),
+    turnLimit: Math.max(1, Number(config.entityTurnLimit ?? 3)),
+    related: entityRelated,
+  })
+  if (entitySection.length > 0) sections.push(entitySection)
   if (included.work.length > 0) {
     sections.push([WORK_MEMORY_HEADER, ...included.work.map((item) => `- ${item}`)].join('\n'))
   }
@@ -423,6 +462,10 @@ export function buildContextText(input) {
 export function createContextService({ ctx, config, log }) {
   const instanceId = `ctx-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
   let registered = false
+  /** v2.2.0 域角色段是否已注册（与 context 段独立）。 */
+  let roleRegistered = false
+  /** v2.2.0 角色段（"我是谁"）是否已注册。 */
+  let characterRegistered = false
   /** 最近用户消息（sessionId → 最近 3 条文本），用于工作记忆检索。 */
   const recentUserBySession = new Map()
   let latestUserText = ''
@@ -638,9 +681,21 @@ export function createContextService({ ctx, config, log }) {
       memory = layer(ctx, 'brainMemory')
       mood = layer(ctx, 'brainMood')
       persona = layer(ctx, 'brainPersona')
-      const userText = queryTextFor(sessionId, memory)
-      const recentUserTexts = recentTextsFor(sessionId, memory, userText)
-      const result = buildContextText({ config, memory, mood, persona, userText, recentUserTexts, recallState })
+      // system prompt 的 section 回调不带 sessionId；用最近一条用户消息的会话兜底，
+      // 否则表意识槽位（"眼下在说谁"）拿不到会话就失效了。
+      const effectiveSession = typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : activeSessionId
+      const userText = queryTextFor(effectiveSession, memory)
+      const recentUserTexts = recentTextsFor(effectiveSession, memory, userText)
+      const result = buildContextText({
+        config,
+        memory,
+        mood,
+        persona,
+        userText,
+        recentUserTexts,
+        recallState,
+        sessionId: effectiveSession,
+      })
       noteInjection(memory, sessionId, result)
       lastRecall = {
         count: result.stats.workingMemory.count,
@@ -687,7 +742,16 @@ export function createContextService({ ctx, config, log }) {
     const recentUserTexts = Array.isArray(input.recentUserTexts)
       ? input.recentUserTexts
       : recentTextsFor(sessionId, memory, userText)
-    const result = buildContextText({ config, memory, mood, persona, userText, recentUserTexts, recallState })
+    const result = buildContextText({
+      config,
+      memory,
+      mood,
+      persona,
+      userText,
+      recentUserTexts,
+      recallState,
+      sessionId,
+    })
     noteInjection(memory, sessionId, result)
     lastRecall = {
       count: result.stats.workingMemory.count,
@@ -712,6 +776,20 @@ export function createContextService({ ctx, config, log }) {
       stats: assembled.stats,
       sectionName: SECTION_NAME,
       order: config.sectionOrder,
+      role: {
+        name: ROLE_SECTION_NAME,
+        enabled: config.roleEnabled,
+        registered: roleRegistered,
+        order: config.roleSectionOrder,
+        text: roleSectionText(),
+      },
+      character: {
+        name: CHARACTER_SECTION_NAME,
+        enabled: config.characterEnabled,
+        registered: characterRegistered,
+        order: config.characterSectionOrder,
+        text: characterSectionText(),
+      },
     }
   }
 
@@ -759,7 +837,55 @@ export function createContextService({ ctx, config, log }) {
   }
 
   /**
+   * 域角色注入文本（v2.2.0）。
+   *
+   * 纯静态：配置不变，文本就不变 → 适合放在动态 context 段之前，让 system prompt
+   * 前缀稳定、能命中缓存。异常一律返回空串（宁可少一段，不能让组装失败）。
+   */
+  function roleSectionText() {
+    try {
+      if (!config.roleEnabled) return ''
+      return buildRoleText(config.role)
+    } catch (error) {
+      try {
+        log('role-text-failed', { instanceId, message: error?.message ?? String(error) })
+      } catch {
+        /* 连日志都失败就彻底静默 */
+      }
+      return ''
+    }
+  }
+
+  /**
+   * 角色段注入文本（v2.2.0，"我是谁"）。
+   *
+   * 内容来自 DB 里模型写出的自我定义（不是配置里的人设）；还没 bootstrap 时返回空串。
+   * 定义变化很慢（攒够证据才修订），所以放在静态规范之后、动态上下文之前。
+   */
+  function characterSectionText() {
+    try {
+      if (!config.characterEnabled) return ''
+      const memory = layer(ctx, 'brainMemory')
+      const character = memory && typeof memory.characterRow === 'function' ? memory.characterRow() : null
+      if (!character) return ''
+      return renderCharacterSection(character, { maxChars: config.characterMaxChars })
+    } catch (error) {
+      try {
+        log('character-text-failed', { instanceId, message: error?.message ?? String(error) })
+      } catch {
+        /* 静默 */
+      }
+      return ''
+    }
+  }
+
+  /**
    * 注册 system prompt 注入段。由插件入口调用；返回 disposer（未注册时返回 undefined）。
+   *
+   * v2.2.0 起注册**两段**：
+   *   - `dsh-brain:role`（静态域角色，order 默认 90，更靠前）；
+   *   - `dsh-brain:context`（每轮现算的工作记忆，order 默认 100）。
+   * 静态段放前面，动态段变化时不会把稳定前缀一起打掉。
    */
   function registerPromptSection() {
     if (!config.enabled || registered) return undefined
@@ -769,20 +895,80 @@ export function createContextService({ ctx, config, log }) {
         log('section-skip', { reason: 'systemPrompt 不可用' })
         return undefined
       }
+      const disposers = []
       const disposer = systemPrompt.section({
         name: SECTION_NAME,
         order: config.sectionOrder,
         text: () => sectionText(),
       })
+      disposers.push(disposer)
       registered = true
       log('section-registered', { instanceId, name: SECTION_NAME, order: config.sectionOrder, maxChars: config.maxChars })
+
+      // v2.2.0：角色段（模型写出的自我定义，慢变）放在静态规范与动态上下文之间。
+      if (config.characterEnabled) {
+        const selfText = characterSectionText()
+        if (selfText.length > 0) {
+          try {
+            disposers.push(
+              systemPrompt.section({
+                name: CHARACTER_SECTION_NAME,
+                order: config.characterSectionOrder,
+                text: () => characterSectionText(),
+              }),
+            )
+            characterRegistered = true
+            log('character-section-registered', {
+              instanceId,
+              name: CHARACTER_SECTION_NAME,
+              order: config.characterSectionOrder,
+              chars: selfText.length,
+            })
+          } catch (error) {
+            log('character-section-failed', { instanceId, message: error?.message ?? String(error) })
+          }
+        } else {
+          log('character-section-skip', { reason: '角色还没有定义（等 bootstrap）' })
+        }
+      }
+
+      if (config.roleEnabled) {
+        const roleText = roleSectionText()
+        if (roleText.length > 0) {
+          try {
+            disposers.push(
+              systemPrompt.section({
+                name: ROLE_SECTION_NAME,
+                order: config.roleSectionOrder,
+                text: () => roleText,
+              }),
+            )
+            roleRegistered = true
+            log('role-section-registered', {
+              instanceId,
+              name: ROLE_SECTION_NAME,
+              order: config.roleSectionOrder,
+              chars: roleText.length,
+            })
+          } catch (error) {
+            log('role-section-failed', { instanceId, message: error?.message ?? String(error) })
+          }
+        } else {
+          log('role-section-skip', { reason: 'role 配置为空' })
+        }
+      }
+
       return () => {
         registered = false
+        roleRegistered = false
+        characterRegistered = false
         log('section-disposed', { instanceId, name: SECTION_NAME })
-        try {
-          disposer?.()
-        } catch {
-          /* 注销失败不影响卸载 */
+        for (const dispose of disposers) {
+          try {
+            dispose?.()
+          } catch {
+            /* 注销失败不影响卸载 */
+          }
         }
       }
     } catch (error) {
@@ -815,6 +1001,23 @@ export function createContextService({ ctx, config, log }) {
         maxChars: config.maxChars,
         workingMemoryMaxChars: config.workingMemoryMaxChars,
         registered,
+        // v2.2.0：域角色段（静态，单独观测）。
+        role: {
+          name: ROLE_SECTION_NAME,
+          enabled: config.roleEnabled,
+          registered: roleRegistered,
+          order: config.roleSectionOrder,
+          chars: roleSectionText().length,
+          summary: roleSummary(config.role, { enabled: config.roleEnabled, order: config.roleSectionOrder }),
+        },
+        // v2.2.0：角色段（模型写出的自我定义，慢变）。
+        character: {
+          name: CHARACTER_SECTION_NAME,
+          enabled: config.characterEnabled,
+          registered: characterRegistered,
+          order: config.characterSectionOrder,
+          chars: characterSectionText().length,
+        },
         consolidated: counts?.consolidated ?? 0,
         unconsolidated: counts?.unconsolidated ?? 0,
         episodes: counts?.episodes ?? 0,
@@ -881,6 +1084,13 @@ export function buildCommandDefinition({ ctx, config, log }) {
       if (command === 'learn' || command === '学习') return learningView({ memory })
       if (command === 'mood') return moodView({ mood })
       if (command === 'persona') return personaView({ persona })
+      if (command === 'profile' || command === '角色') return profileView({ config })
+      if (command === 'who' || command === '我') {
+        return whoView({ ctx, memory, config, log, args: args.slice(1) })
+      }
+      if (command === 'patient' || command === 'entity' || command === '对象') {
+        return patientView({ memory, args: args.slice(1) })
+      }
       if (command === 'consolidate' || command === '整理') {
         return consolidateView({ context, sessionId })
       }
@@ -890,7 +1100,10 @@ export function buildCommandDefinition({ ctx, config, log }) {
         }
         return resetAll({ memory, mood, persona })
       }
-      return { kind: 'error', text: '用法：/brain [memory|recall|learn|mood|persona|consolidate|reset confirm]' }
+      return {
+        kind: 'error',
+        text: '用法：/brain [memory|recall|learn|mood|persona|profile|who|patient|consolidate|reset confirm]',
+      }
     } catch (error) {
       log('command-failed', { message: error?.message ?? String(error) })
       return { kind: 'error', text: `brain 命令执行失败：${error?.message ?? String(error)}` }
@@ -899,8 +1112,8 @@ export function buildCommandDefinition({ ctx, config, log }) {
 
   return {
     name: 'brain',
-    description: '查看/整理 DSH 助手大脑（双向记忆、情绪、人格、工作记忆、召回学习）',
-    input: { hint: '[memory|recall|learn|mood|persona|consolidate|reset confirm]' },
+    description: '查看/整理 DSH 助手大脑（双向记忆、情绪、人格、域角色、角色自我定义、工作记忆、召回学习）',
+    input: { hint: '[memory|recall|learn|mood|persona|profile|who|patient|consolidate|reset confirm]' },
     handler: (invocation) => execute(invocation),
   }
 }
@@ -975,8 +1188,30 @@ function overview({ memory, mood, persona, context, config }) {
   if (context && typeof context.preview === 'function') {
     const preview = context.preview()
     lines.push(`注入：${config.enabled ? '已注册' : '已关闭'}，${preview.text.length} 字${preview.text.length > 0 ? '' : '（当前为空）'}`)
+    const role = preview.role
+    if (role && role.enabled) {
+      lines.push(
+        role.text.length > 0
+          ? `域角色：${config?.role?.title || config?.role?.domain || '已配置'}（${role.text.length} 字，order ${role.order}${role.registered ? '' : '，未注册'}）`
+          : '域角色：已开启但内容为空（/brain profile 看详情）',
+      )
+    } else {
+      lines.push('域角色：未开启（roleEnabled: false）')
+    }
+    const self = preview.character
+    if (self && self.enabled) {
+      lines.push(
+        self.text.length > 0
+          ? `角色（我是谁）：已有定义 ${self.text.length} 字（order ${self.order}${self.registered ? '' : '，未注册'}）· /brain who 看全文`
+          : '角色（我是谁）：还没有定义（等后台整理 bootstrap）· /brain who revise 可立即生成',
+      )
+    } else {
+      lines.push('角色（我是谁）：未开启（characterEnabled: false）')
+    }
   }
-  lines.push('明细：/brain memory | /brain mood | /brain persona | /brain consolidate（立即整理一次）')
+  lines.push(
+    '明细：/brain memory | /brain mood | /brain persona | /brain profile | /brain who | /brain consolidate（立即整理一次）',
+  )
   return { kind: 'success', text: lines.join('\n') }
 }
 
@@ -1172,6 +1407,161 @@ function moodView({ mood }) {
   if (selfHistory.length > 0) {
     lines.push(`助手近期：${selfHistory.map((entry) => `${entry.status}(${entry.reason || '平稳'})`).join(' → ')}`)
   }
+  return { kind: 'success', text: lines.join('\n') }
+}
+
+/**
+ * `/brain who`（v2.2.0 角色层）：看"我是谁"。
+ *
+ * - `/brain who`            当前定义 + 版本 + 证据轮数 + 最近几版
+ * - `/brain who revise`     立刻让模型按对话重写一版（bootstrap 或 revise 自判）
+ * - `/brain who name 名字`   改角色名（不产生新版本）
+ */
+async function whoView({ ctx, memory, config, log, args }) {
+  const store = memory && typeof memory.characters === 'function' ? memory.characters() : null
+  if (!store) return { kind: 'error', text: missing('记忆') }
+  const sub = String(args?.[0] ?? '').toLowerCase()
+
+  if (sub === 'name' || sub === '改名' || sub === 'rename') {
+    const name = String(args.slice(1).join(' ') ?? '').trim()
+    if (name.length === 0) return { kind: 'error', text: '用法：/brain who name <角色名>' }
+    memory.renameCharacter({ name })
+    return { kind: 'success', text: `角色名已改为「${name}」（定义不变）。` }
+  }
+
+  if (sub === 'revise' || sub === '重写') {
+    const counts = memory.counts()
+    const turns = memory.recentOriginal(8)
+    const evidenceTexts = turns.map((turn) => `用户：${oneLine(turn.user ?? '', 120)}\n助手：${oneLine(turn.assistant ?? '', 120)}`)
+    const current = memory.characterRow()
+    const mode = current && current.version > 0 ? 'revise' : 'bootstrap'
+    const result = await runCharacterStep({
+      ctx,
+      config,
+      memory,
+      log,
+      mode,
+      payload: {
+        name: current?.name ?? '',
+        evidenceTurns: counts.turns,
+        evidenceTexts,
+        lastEvidenceSeq: 0,
+      },
+    })
+    if (!result.ok) return { kind: 'error', text: `重写失败：${result.reason ?? '未知原因'}` }
+    return {
+      kind: 'success',
+      text: [
+        `已按 ${counts.turns} 轮对话${mode === 'bootstrap' ? '写出第一版' : '重写一版'}（来源：${result.source === 'llm' ? '模型' : '规则兜底'}，v${result.character.version}）。`,
+        '',
+        result.character.definition,
+      ].join('\n'),
+    }
+  }
+
+  const character = memory.characterRow()
+  if (!character || character.version === 0 || character.definition.trim().length === 0) {
+    return {
+      kind: 'info',
+      text: [
+        '角色还没有定义（等第一轮后台整理后，由模型按对话写出第一版）。',
+        `开关：characterEnabled = ${config?.characterEnabled === false ? '关' : '开'}；攒够 ${config?.characterReviseEveryTurns ?? 6} 轮证据才修订一次。`,
+        '想立刻生成：/brain who revise',
+      ].join('\n'),
+    }
+  }
+  const lines = [
+    `角色：${character.name || '（未命名）'} · v${character.version} · 来自${character.source === 'llm' ? '模型' : character.source === 'fallback' ? '规则兜底' : character.source} · 证据 ${character.evidenceTurns} 轮`,
+    '',
+    character.definition,
+  ]
+  const versions = memory.characterVersions(3)
+  if (versions.length > 1) {
+    lines.push('', `历史版本：${versions.filter((item) => item.version !== character.version).map((item) => `v${item.version}(${item.reason})`).join(' · ')}`)
+  }
+  lines.push('', '操作：/brain who revise（立刻重写） · /brain who name <名字>')
+  return { kind: 'success', text: lines.join('\n') }
+}
+
+/**
+ * `/brain patient [名字]`（v2.3.0 实体层）。
+ *
+ * - 不带参数：列出已知对象（类型、被聊过的轮数）
+ * - 带名字：这个对象的档案（带时间要点 + 最近聊到的原文片段）
+ */
+function patientView({ memory, args }) {
+  if (!memory || typeof memory.entityList !== 'function') return { kind: 'error', text: missing('记忆') }
+  const query = String(args?.join(' ') ?? '').trim()
+  if (query.length === 0) {
+    const items = memory.entityList(20)
+    if (items.length === 0) {
+      return {
+        kind: 'info',
+        text: '还没有识别出任何对象。规则只认明确信号（「患者张三」「客户：李姐」「张三先生」），宁缺毋滥。',
+      }
+    }
+    const lines = [`已知对象 ${items.length} 个：`]
+    for (const entity of items) {
+      const profile = memory.entityProfile(entity.id, { factLimit: 0, turnLimit: 0 })
+      lines.push(`- ${entity.name}（${labelOfKind(entity.kind)}，聊过 ${profile?.turnCount ?? 0} 轮）`)
+    }
+    lines.push('', '看详情：/brain patient <名字>')
+    return { kind: 'success', text: lines.join('\n') }
+  }
+  const profile = memory.entityProfile(query, { factLimit: 8, turnLimit: 4 })
+  if (!profile) return { kind: 'error', text: `没有找到对象「${query}」。` }
+  const lines = [`${profile.name}（${labelOfKind(profile.kind)}）· 关联 ${profile.turnCount} 轮`]
+  if (profile.facts.length > 0) {
+    lines.push('', '带时间的要点：')
+    for (const fact of profile.facts) {
+      lines.push(`- ${String(fact.at ?? '').slice(0, 16)} ${oneLine(fact.text, 100)}`)
+    }
+  }
+  if (profile.turns.length > 0) {
+    lines.push('', '最近聊到：')
+    for (const turn of profile.turns) {
+      lines.push(`- ${String(turn.at ?? '').slice(0, 16)} ${oneLine(turn.user, 80)}`)
+    }
+  }
+  return { kind: 'success', text: lines.join('\n') }
+}
+
+/** 实体类型的中文名（命令输出用）。 */
+function labelOfKind(kind) {
+  switch (kind) {
+    case 'patient':
+      return '患者'
+    case 'client':
+      return '客户'
+    case 'project':
+      return '项目'
+    case 'pet':
+      return '宠物'
+    default:
+      return '对象'
+  }
+}
+
+/**
+ * `/brain profile`（v2.2.0 域角色）：把**实际会注入的原文**打出来。
+ *
+ * 为什么要能看原文：角色/红线是"模型看到的东西"，如果只能看配置，很容易出现
+ * 「以为写了红线，其实这一段没注册」的情况。
+ */
+function profileView({ config }) {
+  const role = config?.role
+  const lines = [roleSummary(role, { enabled: config?.roleEnabled, order: config?.roleSectionOrder })]
+  const text = config?.roleEnabled ? buildRoleText(role) : ''
+  if (text.length === 0) {
+    lines.push('')
+    lines.push(
+      '这一层没有注入任何内容。在 `dsh-context` 的 config 里填 `roleEnabled: true` + `role`（domain / title / identity / expertise / rules / redlines / referrals）后生效。',
+    )
+    return { kind: 'info', text: lines.join('\n') }
+  }
+  lines.push('')
+  lines.push(`—— 注入原文（${text.length} 字，order ${config?.roleSectionOrder}）——`)
+  lines.push(text)
   return { kind: 'success', text: lines.join('\n') }
 }
 

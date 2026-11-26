@@ -1,6 +1,6 @@
 {
   "name": "@shenyue/dsh-brain",
-  "version": "2.1.0",
+  "version": "2.3.0",
   "private": true,
   "type": "module",
   "description": "DSH-native assistant brain as four independent host plugins: dual-side memory, mood, persona, and automatic system-prompt context assembly.",

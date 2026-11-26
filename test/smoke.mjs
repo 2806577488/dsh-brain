@@ -393,8 +393,8 @@ check(
 check('db.file-created', fs.existsSync(path.join(mainDir, 'brain.db')), path.join(mainDir, 'brain.db'))
 check(
   'db.schema-version',
-  sharedHandle.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()?.value === '5' &&
-    sharedHandle.prepare('PRAGMA user_version').get()?.user_version === 5,
+  sharedHandle.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()?.value === '6' &&
+    sharedHandle.prepare('PRAGMA user_version').get()?.user_version === 6,
 )
 const tableNames = sharedHandle
   .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
@@ -402,9 +402,27 @@ const tableNames = sharedHandle
   .map((row) => row.name)
 check(
   'db.tables-created',
-  ['memory_turns', 'memory_facts', 'memory_summaries', 'memory_episodes', 'memory_archives', 'mood_state', 'mood_history', 'persona_traits', 'persona_baseline', 'collector_state', 'collector_pending', 'meta'].every(
-    (name) => tableNames.includes(name),
-  ),
+  [
+    'memory_turns',
+    'memory_facts',
+    'memory_summaries',
+    'memory_episodes',
+    'memory_archives',
+    'mood_state',
+    'mood_history',
+    'persona_traits',
+    'persona_baseline',
+    'collector_state',
+    'collector_pending',
+    'meta',
+    // v2.2.0：角色层 + 实体层
+    'characters',
+    'character_versions',
+    'entities',
+    'entity_facts',
+    'entity_turns',
+    'wm_state',
+  ].every((name) => tableNames.includes(name)),
   tableNames,
 )
 check(

@@ -18,6 +18,7 @@
  */
 
 import { completeText, resolveRoute } from './llm.js'
+import { runCharacterStep } from './character.js'
 import { isNoiseTurn } from './memory.js'
 import { CONSOLIDATE_SYSTEM_PROMPT } from './prompts.js'
 import { clamp01, oneLine } from './store.js'
@@ -212,6 +213,8 @@ export function createConsolidator({ ctx, config, log }) {
   const stats = { runs: 0, episodes: 0, factsAdded: 0, turnsMarked: 0, failures: 0, lastAt: null, lastSessionId: null }
   let disposed = false
   let memoryMissingLogged = false
+  /** 角色修订同一时刻只跑一个（模型调用慢，避免攒一堆排队）。 */
+  let characterBusy = false
 
   /** 取记忆层服务（动态，允许单独停用记忆层）。 */
   function getMemory() {
@@ -221,6 +224,55 @@ export function createConsolidator({ ctx, config, log }) {
     } catch {
       return undefined
     }
+  }
+
+  /**
+   * v2.2.0：「睡眠期」顺带维护「我是谁」。
+   *
+   * 角色由对话塑造：第一批证据到了就 bootstrap，之后每攒够 `characterReviseEveryTurns`
+   * 轮再让模型改写一版。这里**不 await**（模型慢，不能拖住整理），失败只写日志；
+   * 同一时刻只跑一个，避免堆积。
+   */
+  function maybeUpdateCharacter(memory, turns) {
+    if (config?.characterEnabled === false || characterBusy) return
+    if (!memory || typeof memory.characterNeedsRevision !== 'function') return
+    const totalTurns = typeof memory.counts === 'function' ? Number(memory.counts().turns) || 0 : 0
+    const everyTurns = Math.max(1, Number(config?.characterReviseEveryTurns) || 6)
+    let decision
+    try {
+      decision = memory.characterNeedsRevision(totalTurns, everyTurns)
+    } catch {
+      return
+    }
+    if (!decision?.needed) return
+    characterBusy = true
+    const evidenceTexts = (Array.isArray(turns) ? turns : [])
+      .slice(-8)
+      .map((turn) => `用户：${oneLine(turn.user, 120)}\n助手：${oneLine(turn.assistant, 120)}`)
+    const lastEvidenceSeq = (Array.isArray(turns) ? turns : []).reduce(
+      (max, turn) => (Number.isFinite(Number(turn.seq)) ? Math.max(max, Number(turn.seq)) : max),
+      0,
+    )
+    Promise.resolve()
+      .then(() =>
+        runCharacterStep({
+          ctx,
+          config,
+          memory,
+          log,
+          mode: decision.bootstrap ? 'bootstrap' : 'revise',
+          payload: {
+            name: typeof memory.characterRow === 'function' ? memory.characterRow()?.name ?? '' : '',
+            evidenceTurns: totalTurns,
+            evidenceTexts,
+            lastEvidenceSeq,
+          },
+        }),
+      )
+      .catch((error) => log('character-step-failed', { message: error?.message ?? String(error) }))
+      .finally(() => {
+        characterBusy = false
+      })
   }
 
   /** 取某一侧的当前情绪快照（失败就不带）。 */
@@ -435,6 +487,17 @@ export function createConsolidator({ ctx, config, log }) {
         facts: { user: facts?.user?.added ?? 0, self: facts?.self?.added ?? 0 },
         marked: changed,
       })
+      // v2.3.0：实体层——把这批轮次挂到患者/客户/项目档案上（规则抽取、宁缺毋滥、
+      // 纯 DB，快；失败不影响整理）。
+      try {
+        if (typeof memory.entityIngest === 'function') memory.entityIngest(turns)
+      } catch (error) {
+        log('entity-ingest-failed', { sessionId, message: error?.message ?? String(error) })
+      }
+
+      // v2.2.0：睡眠期顺带维护「我是谁」（不 await：模型慢，不能拖住整理）。
+      maybeUpdateCharacter(memory, turns)
+
       return { ok: true, turns: turns.length, factsAdded: stats.factsAdded, episodeId, summaryChars, salience }
     } catch (error) {
       stats.failures += 1
