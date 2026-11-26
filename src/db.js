@@ -25,7 +25,7 @@ import { classifyTextOrigin } from './roles.js'
 import { readJsonFile, stampNow } from './store.js'
 
 /** 当前 schema 版本（`meta.schema_version`，同时写 `PRAGMA user_version`）。 */
-export const SCHEMA_VERSION = 5
+export const SCHEMA_VERSION = 6
 
 /** 召回学习：全局特征权重的初始行（v2.1.0）。 */
 export const RECALL_FEATURES = Object.freeze(['relevance', 'salience', 'recency', 'topic', 'affection'])
@@ -189,6 +189,75 @@ const SCHEMA_SQL = [
      weight REAL NOT NULL DEFAULT 1,
      updated_at TEXT
    )`,
+  // v2.2.0：角色（"我是谁"）。
+  //
+  // 这是**模型从对话里长出来的自我定义**，不是配置里写死的人设：
+  // 创建时由模型根据初始对话写第一版（bootstrap），之后在"睡眠期"（后台消化）按新证据
+  // 修订，每次修订都留一版历史，可回看"这个角色是怎么变成现在这样的"。
+  // 静态的只有领域规范（rules/redlines），那是"这个职业要守什么"，不是"这个人是谁"。
+  `CREATE TABLE IF NOT EXISTS characters (
+     id TEXT PRIMARY KEY,
+     name TEXT NOT NULL,
+     emoji TEXT,
+     definition TEXT NOT NULL DEFAULT '',
+     evidence_turns INTEGER NOT NULL DEFAULT 0,
+     last_evidence_seq INTEGER NOT NULL DEFAULT 0,
+     version INTEGER NOT NULL DEFAULT 0,
+     source TEXT NOT NULL DEFAULT 'bootstrap',
+     updated_at TEXT,
+     created_at TEXT NOT NULL
+   )`,
+  // 角色定义的版本历史（只增不改）。
+  `CREATE TABLE IF NOT EXISTS character_versions (
+     character_id TEXT NOT NULL,
+     version INTEGER NOT NULL,
+     definition TEXT NOT NULL,
+     reason TEXT NOT NULL DEFAULT 'revise',
+     evidence_turns INTEGER NOT NULL DEFAULT 0,
+     created_at TEXT NOT NULL,
+     PRIMARY KEY(character_id, version)
+   )`,
+  // 实体（患者 / 客户 / 项目 / 宠物…）：跨会话的对象档案。
+  `CREATE TABLE IF NOT EXISTS entities (
+     id TEXT PRIMARY KEY,
+     kind TEXT NOT NULL DEFAULT 'person',
+     name TEXT NOT NULL,
+     aliases TEXT NOT NULL DEFAULT '',
+     attrs TEXT NOT NULL DEFAULT '{}',
+     source TEXT NOT NULL DEFAULT 'rule',
+     created_at TEXT NOT NULL,
+     updated_at TEXT
+   )`,
+  // 实体事实：挂到具体对象上的、带时间的要点（主诉 / 处方 / 约定…）。
+  `CREATE TABLE IF NOT EXISTS entity_facts (
+     id TEXT PRIMARY KEY,
+     entity_id TEXT NOT NULL,
+     kind TEXT NOT NULL DEFAULT 'note',
+     text TEXT NOT NULL,
+     at TEXT,
+     turn_id TEXT,
+     session_id TEXT,
+     created_at TEXT NOT NULL
+   )`,
+  // 实体 ↔ 轮次：用于"这个对象最近聊过什么"和原文溯源。
+  `CREATE TABLE IF NOT EXISTS entity_turns (
+     entity_id TEXT NOT NULL,
+     turn_id TEXT NOT NULL,
+     at TEXT,
+     session_id TEXT,
+     PRIMARY KEY(entity_id, turn_id)
+   )`,
+  // v2.3.0：表意识槽位（"眼下在说谁"）。
+  //
+  // 会话是线性的，用户下一句常说「他今天怎么样」「那个患者呢」——没有名字。
+  // 这里给每个会话存一小份"当前焦点"（实体 id + 时间），下一轮解析不到名字时用它兜底。
+  // 有 TTL：隔太久再提"他"，不该还接回上一个患者。
+  `CREATE TABLE IF NOT EXISTS wm_state (
+     session_id TEXT PRIMARY KEY,
+     kind TEXT NOT NULL DEFAULT 'entity',
+     data TEXT NOT NULL DEFAULT '{}',
+     updated_at TEXT NOT NULL
+   )`,
 ]
 
 /** 索引 DDL（幂等）。 */
@@ -210,6 +279,11 @@ const INDEX_SQL = [
   'CREATE INDEX IF NOT EXISTS idx_recall_misses_at ON recall_misses(at DESC)',
   'CREATE INDEX IF NOT EXISTS idx_recall_misses_session ON recall_misses(session_id)',
   'CREATE INDEX IF NOT EXISTS idx_recall_term_weights_weight ON recall_term_weights(weight DESC)',
+  // v2.2.0：角色 / 实体
+  'CREATE INDEX IF NOT EXISTS idx_character_versions_created ON character_versions(created_at DESC)',
+  'CREATE INDEX IF NOT EXISTS idx_entities_kind_name ON entities(kind, name)',
+  'CREATE INDEX IF NOT EXISTS idx_entity_facts_entity ON entity_facts(entity_id, at DESC)',
+  'CREATE INDEX IF NOT EXISTS idx_entity_turns_entity ON entity_turns(entity_id, at DESC)',
 ]
 
 /** 旧版本（v1.0.0）在同一目录写的 JSON 文件。 */

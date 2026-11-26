@@ -72,3 +72,45 @@ $node = 'C:\Users\Administrator\.dsh\dsh-runtimes\dsh-next-primary-runtime\depen
 - `services.provided`：四个 Service 全部注册
 - `degrade.mood-disabled-memory-collects`：单层停用不影响其它层
 
+## 实体层（v2.3.0，`test/entity.test.mjs`）
+
+```powershell
+& $node test\entity.test.mjs
+```
+
+- 规则抽取：身份前缀（患者/病人/客户/项目/宠物）、敬称后缀、敬称算代号（王先生）；
+  `今天天气不错` 这类普通句子**不产生对象**
+- 存储：`upsert` 幂等（按归一化名字）、按名字/别名查找、`ingestTurns` 抽实体 +
+  关联轮次 + 记要点（含"只提到名字"的既有对象）
+- `resolveMentions`：本轮提到谁；渲染「当前对象」段与超预算截断
+
+## 角色层（v2.2.0，`test/character.test.mjs`）
+
+```powershell
+& $node test\character.test.mjs
+```
+
+- 定义去围栏/去标题/限长；无模型兜底只写看得见的事实（不编造性格）
+- bootstrap / revise 的 messages 形状；渲染「没定义不注入、有定义带标题」
+- 存储：`ensure` 幂等建 v0 → `save` 产生 v1 + 历史 → 攒不够证据不修订、够了才修订
+- 改名不动版本与定义；空定义拒绝保存
+- 模型不可用 → 写规则兜底定义并标 `fallback`（走 `runCharacterStep` 全链路）
+
+## 域角色层（v2.2.0，`test/role.test.mjs`）
+
+单独一支，纯函数、不需要 DSH 与数据库：
+
+```powershell
+& $node test\role.test.mjs
+```
+
+- `空配置 → 空角色，不注入`：默认不会凭空多出一段 system prompt
+- `垃圾输入被收敛，不抛异常`：非字符串、重复项、超长、列表上限
+- `注入文本包含该有的段`：角色 / 画像 / 规范 / 红线 / 红旗 / 不确定策略
+- `预算再紧也不丢红线与规范`：`maxChars` 压到 200 时只丢画像项
+- `可以从实体上关掉共享记忆说明`（多患者场景默认要它）
+- `缺 uncertainty 时给默认兜底策略`
+- `dsh-context 接受 role 三项且不报未知配置`
+- `默认关闭域角色`
+- `/brain profile` 摘要条目数、注入段名字固定
+

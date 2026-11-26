@@ -10,7 +10,11 @@
  */
 
 import { DEFAULT_CONSOLIDATE_CONFIG } from './consolidator.js'
+import { DEFAULT_ROLE_SECTION_ORDER, EMPTY_ROLE, normalizeRoleConfig } from './role.js'
 import { booleanOr, clamp, integerOr, numberOr, stringOr } from './store.js'
+
+/** 域角色默认值（空角色 = 这一层不注入；具体内容写在 bundle 的 cordis.patch.yml 里）。 */
+export const DEFAULT_ROLE_CONFIG = Object.freeze({ ...EMPTY_ROLE })
 
 /** 采集过滤的默认值（memory / mood / persona 三层各有一份同名配置）。 */
 export const COLLECT_DEFAULTS = Object.freeze({
@@ -153,6 +157,34 @@ export const DEFAULT_CONTEXT_CONFIG = Object.freeze({
   includeSelf: true,
   /** system prompt 段的排序位置（越大越靠后）。 */
   sectionOrder: 100,
+  /** 域角色层（v2.2.0）：是否注册「角色 + 用户画像 + 专业规范/红线」注入段。 */
+  roleEnabled: false,
+  /** 域角色段的排序位置：默认比 context 段更靠前，静态前缀不打掉缓存。 */
+  roleSectionOrder: DEFAULT_ROLE_SECTION_ORDER,
+  /** 域角色内容（domain / title / identity / 画像 / 规范 / 红线 / 红旗 / 不确定策略）。 */
+  role: DEFAULT_ROLE_CONFIG,
+  /** v2.2.0 角色层（"我是谁"）：是否注入模型写出的自我定义段。 */
+  characterEnabled: true,
+  /** 角色段的排序位置：在静态规范（90）之后、动态上下文（100）之前。 */
+  characterSectionOrder: 95,
+  /** 角色定义注入上限（字符）。 */
+  characterMaxChars: 600,
+  /** 攒够多少轮新证据才让模型修订一次角色定义（避免每轮翻烧饼）。 */
+  characterReviseEveryTurns: 6,
+  /** v2.3.0 实体层：是否注入「当前对象」档案段 + 让后台整理抽取实体。 */
+  entityEnabled: true,
+  /** 一轮里最多注入几个对象的档案。 */
+  entityLimit: 2,
+  /** 「当前对象」段的字符上限。 */
+  entityMaxChars: 400,
+  /** 每个对象最多注入几条带时间要点。 */
+  entityFactLimit: 6,
+  /** 每个对象最多注入几条"最近聊到"。 */
+  entityTurnLimit: 3,
+  /** 激活扩散：把"和当前对象同段出现过"的其他对象也列出来。 */
+  entitySpreadEnabled: true,
+  /** 表意识槽位 TTL（分钟）：隔这么久再提「他」，不再接回上一个对象。 */
+  entityFocusTtlMinutes: 30,
   /** 是否注册 /brain 命令。 */
   commandEnabled: true,
   /** 诊断：每次 sectionText() 被调用时写 section-text 日志（默认关）。 */
@@ -351,6 +383,30 @@ export function normalizeContextConfig(raw) {
       includeUser: booleanOr(input.includeUser, DEFAULT_CONTEXT_CONFIG.includeUser),
       includeSelf: booleanOr(input.includeSelf, DEFAULT_CONTEXT_CONFIG.includeSelf),
       sectionOrder: numberOr(input.sectionOrder, DEFAULT_CONTEXT_CONFIG.sectionOrder),
+      roleEnabled: booleanOr(input.roleEnabled, DEFAULT_CONTEXT_CONFIG.roleEnabled),
+      roleSectionOrder: numberOr(input.roleSectionOrder, DEFAULT_CONTEXT_CONFIG.roleSectionOrder),
+      role: normalizeRoleConfig(input.role, DEFAULT_CONTEXT_CONFIG.role),
+      characterEnabled: booleanOr(input.characterEnabled, DEFAULT_CONTEXT_CONFIG.characterEnabled),
+      characterSectionOrder: numberOr(input.characterSectionOrder, DEFAULT_CONTEXT_CONFIG.characterSectionOrder),
+      characterMaxChars: integerOr(input.characterMaxChars, DEFAULT_CONTEXT_CONFIG.characterMaxChars, 120, 4000),
+      characterReviseEveryTurns: integerOr(
+        input.characterReviseEveryTurns,
+        DEFAULT_CONTEXT_CONFIG.characterReviseEveryTurns,
+        1,
+        200,
+      ),
+      entityEnabled: booleanOr(input.entityEnabled, DEFAULT_CONTEXT_CONFIG.entityEnabled),
+      entityLimit: integerOr(input.entityLimit, DEFAULT_CONTEXT_CONFIG.entityLimit, 1, 5),
+      entityMaxChars: integerOr(input.entityMaxChars, DEFAULT_CONTEXT_CONFIG.entityMaxChars, 80, 2000),
+      entityFactLimit: integerOr(input.entityFactLimit, DEFAULT_CONTEXT_CONFIG.entityFactLimit, 0, 20),
+      entityTurnLimit: integerOr(input.entityTurnLimit, DEFAULT_CONTEXT_CONFIG.entityTurnLimit, 0, 10),
+      entitySpreadEnabled: booleanOr(input.entitySpreadEnabled, DEFAULT_CONTEXT_CONFIG.entitySpreadEnabled),
+      entityFocusTtlMinutes: integerOr(
+        input.entityFocusTtlMinutes,
+        DEFAULT_CONTEXT_CONFIG.entityFocusTtlMinutes,
+        1,
+        1440,
+      ),
       commandEnabled: booleanOr(input.commandEnabled, DEFAULT_CONTEXT_CONFIG.commandEnabled),
       debugSection: booleanOr(input.debugSection, DEFAULT_CONTEXT_CONFIG.debugSection),
       consolidateEnabled: booleanOr(input.consolidateEnabled, DEFAULT_CONTEXT_CONFIG.consolidateEnabled),

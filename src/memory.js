@@ -19,6 +19,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { acquireDatabase, getMetaValue, normalizeForDb, setMeta } from './db.js'
+import { createCharacterStore } from './character.js'
+import { createEntityStore } from './entities.js'
 import { createLearningStore } from './learning.js'
 import { completeText, resolveRoute } from './llm.js'
 import { FACT_SYSTEM_PROMPT, SUMMARY_SYSTEM_PROMPT } from './prompts.js'
@@ -495,6 +497,8 @@ export function createMemoryService({ ctx, config, log, dir }) {
   const markdownFile = path.join(dir, 'brain.md')
   let handle
   let learning
+  let characters
+  let entities
   let closed = false
   let loaded = false
   let extracting = false
@@ -525,6 +529,10 @@ export function createMemoryService({ ctx, config, log, dir }) {
     handle = acquireDatabase({ dbFile, dataDir: dir, log })
     // v2.1.0：召回自学习仓库（共用同一连接；enabled=false 时所有写入都是 no-op）。
     learning = createLearningStore({ handle, config, log })
+    // v2.2.0：角色层（"我是谁"）。懒创建是为了让测试能在 init 前拿到 service。
+    characters = null
+    // v2.3.0：实体层（患者/客户/项目…）。
+    entities = null
     loaded = true
     // 一次性清洗历史摘要/情节里混入的模板化噪声（幂等）。
     scrubSummaryNoise()
@@ -1673,6 +1681,8 @@ export function createMemoryService({ ctx, config, log, dir }) {
     init,
     close() {
       closed = true
+      characters = null
+      entities = null
       if (handle !== undefined) handle.release()
       handle = undefined
     },
@@ -1747,6 +1757,101 @@ export function createMemoryService({ ctx, config, log, dir }) {
     runFactExtraction,
     runSummary,
     applyFacts,
+    // v2.2.0：角色层（"我是谁"）。定义由模型按对话写出，存在 DB 里并保留版本历史。
+    characters() {
+      if (!handle) return null
+      if (characters === null || characters === undefined) {
+        characters = createCharacterStore({ db: handle.db, log })
+        characters.ensure({ name: '' })
+      }
+      return characters
+    },
+    character() {
+      const store = service.characters()
+      return store ? store.get() : null
+    },
+    characterVersions(limit = 10) {
+      const store = service.characters()
+      return store ? store.versions(limit) : []
+    },
+    saveCharacter(input) {
+      const store = service.characters()
+      return store ? store.save(input) : { ok: false, reason: 'no-store' }
+    },
+    renameCharacter({ name, emoji } = {}) {
+      const store = service.characters()
+      return store ? store.setMeta({ name, emoji }) : null
+    },
+    characterNeedsRevision(evidenceTurns, everyTurns = 6) {
+      const store = service.characters()
+      return store ? store.needsRevision({ evidenceTurns, everyTurns }) : { needed: false }
+    },
+    /** 角色定义（给 context 层渲染注入段用）。 */
+    characterRow() {
+      return service.character()
+    },
+    // v2.3.0：实体层（患者 / 客户 / 项目…）。规则抽取，宁缺毋滥。
+    entities() {
+      if (!handle) return null
+      if (entities === null || entities === undefined) {
+        entities = createEntityStore({ db: handle.db, log })
+      }
+      return entities
+    },
+    entityList(limit = 50) {
+      const store = service.entities()
+      return store ? store.list(limit) : []
+    },
+    /** 按名字或 id 取档案（`/brain patient <名字>`）。 */
+    entityProfile(nameOrId, options = {}) {
+      const store = service.entities()
+      if (!store) return null
+      const key = String(nameOrId ?? '').trim()
+      if (key.length === 0) return null
+      const byId = store.get(key)
+      const entity = byId ?? store.findByName(key)
+      return entity ? store.profile(entity.id, options) : null
+    },
+    /** 从一批轮次里抽实体并建关联（后台整理时调用；同步、纯 DB）。 */
+    entityIngest(turns) {
+      const store = service.entities()
+      if (!store) return { entities: 0, links: 0 }
+      try {
+        return store.ingestTurns(turns)
+      } catch (error) {
+        log('entity-ingest-failed', { message: error?.message ?? String(error) })
+        return { entities: 0, links: 0 }
+      }
+    },
+    /** 本轮文本里提到的已知实体（注入"当前对象"用）。 */
+    entityResolve(text, limit = 2) {
+      const store = service.entities()
+      return store ? store.resolveMentions(text, limit) : []
+    },
+    /**
+     * v2.3.0 表意识槽位 + 激活扩散：本轮在说谁。
+     *
+     * 点名优先；没点名就用本会话焦点（「他今天怎么样」能接上）；顺带给出相关对象。
+     */
+    entityResolveForTurn({ sessionId, text, limit = 2, factLimit = 6, turnLimit = 3, ttlMs, spread = true } = {}) {
+      const store = service.entities()
+      if (!store) return { profiles: [], viaFocus: false, related: [] }
+      try {
+        return store.resolveForTurn({ sessionId, text, limit, factLimit, turnLimit, ttlMs, spread })
+      } catch (error) {
+        log('entity-resolve-failed', { message: error?.message ?? String(error) })
+        return { profiles: [], viaFocus: false, related: [] }
+      }
+    },
+    /** 直接给 context 层用的档案列表（已带最近轮次与要点）。 */
+    entityProfilesForPrompt(text, { limit = 2, factLimit = 6, turnLimit = 3 } = {}) {
+      const store = service.entities()
+      if (!store) return []
+      return store
+        .resolveMentions(text, limit)
+        .map((entity) => store.profile(entity.id, { factLimit, turnLimit }))
+        .filter(Boolean)
+    },
     getLastSeq,
     setLastSeq,
     getPending,

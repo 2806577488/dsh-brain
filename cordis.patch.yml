@@ -102,7 +102,25 @@
         sectionOrder: 100
         commandEnabled: true
         debugSection: false
+        # v2.2.0：域角色层（**通用**）。插件不绑定任何领域——这里默认关闭，
+        # 要启用就把 roleEnabled 改成 true，并把 role 填成你的领域。
+        # 现成配方（整段贴到本行 config 下即可）：
+        #   examples/profiles/tcm.yml          中医临床
+        #   examples/profiles/code-review.yml  代码评审
+        # 校验方式：node tools/render-profile.mjs examples/profiles/tcm.yml
+        roleEnabled: false
+        roleSectionOrder: 90
+        role: {}
         # 归档：只对当前 lead 会话开启（其它会话仍关闭）；DSH compaction 保留为安全网
+        # v2.3.0 实体层：后台整理时抽「患者/客户/项目」，本轮提到的对象优先注入。
+        entityEnabled: true
+        entityLimit: 2
+        entityMaxChars: 400
+        entityFactLimit: 6
+        entityTurnLimit: 3
+        # 激活扩散 + 表意识槽位（"他今天怎么样"也能接上）
+        entitySpreadEnabled: true
+        entityFocusTtlMinutes: 30
         archiveEnabled: true
         archiveAtPercent: 0.05
         keepRecentTurns: 4

@@ -282,6 +282,12 @@ surface 替换（`session.append(..., { surfaceOp:{op:'replace', startSeq, endSe
 | `/brain recall <关键词>` | 召回调试：每条候选的 score（相关/话题）、是否已归档、原文片段 |
 | `/brain mood` | 用户与助手两侧状态 + 最近轨迹 |
 | `/brain persona` | 两侧倾向的自然语言渲染 |
+| `/brain profile` | 域角色层（规范）：摘要 + **实际注入的原文**（v2.2.0） |
+| `/brain who` | 角色层（"我是谁"）：当前定义 + 版本 + 证据轮数 + 最近版本（v2.2.0） |
+| `/brain who revise` | 立刻让模型按对话重写一版角色定义（未定义时是 bootstrap） |
+| `/brain who name <名字>` | 改角色名（不产生新版本） |
+| `/brain patient` | 实体层：列出已知对象（类型 + 聊过几轮）（v2.3.0） |
+| `/brain patient <名字>` | 这个对象的档案：带时间要点 + 最近聊到的原文片段 |
 | `/brain consolidate` | 立即对当前会话跑一次后台整理（不压缩、不改会话；失败给中文原因） |
 | `/brain reset confirm` | 重置三层（各自先备份 `*.bak-<ts>`）；缺 `confirm` 会拒绝 |
 
@@ -355,6 +361,35 @@ surface 替换（`session.append(..., { surfaceOp:{op:'replace', startSeq, endSe
 | `archiveEnabled` / `archiveDryRun` | `false` / `true` | 归档开关 / 只演练不 append（双保险） |
 | `archiveAtPercent` / `keepRecentTurns` / `archiveMaxTurnsPerBatch` | `0.5` / `4` / `8` | 压力阈值 / 保留最近轮数 / 单次最多归档轮数 |
 | `archiveMarker` / `archiveSessionIds` | `oneline` / `[]` | 标记文案 / 白名单（测试用） |
+| `roleEnabled` | `false` | 是否注册**域角色段**（v2.2.0） |
+| `roleSectionOrder` | `90` | 域角色段的排序位置（比 `sectionOrder` 小 = 更靠前，静态前缀更稳） |
+| `role` | 空角色 | 域角色内容，见下 |
+| `characterEnabled` | `true` | 是否注入**角色段**（模型写出的自我定义，v2.2.0） |
+| `characterSectionOrder` | `95` | 角色段排序位置（规范 90 → 角色 95 → 上下文 100） |
+| `characterMaxChars` | `600` | 角色定义注入上限 |
+| `characterReviseEveryTurns` | `6` | 攒够多少轮新证据才让模型修订一次角色定义 |
+| `entityEnabled` | `true` | 实体层（v2.3.0）：后台抽取 + 注入「当前对象」段 |
+| `entityLimit` | `2` | 一轮最多注入几个对象的档案 |
+| `entityMaxChars` | `400` | 「当前对象」段字符上限 |
+| `entityFactLimit` / `entityTurnLimit` | `6` / `3` | 每个对象注入几条要点 / 几条"最近聊到" |
+| `entitySpreadEnabled` | `true` | 激活扩散：列出与当前对象同段出现过的其他对象 |
+| `entityFocusTtlMinutes` | `30` | 表意识槽位 TTL：隔这么久再提「他」不再接旧对象 |
+
+#### `role`（v2.2.0 域角色层）
+
+| 键 | 说明 |
+|---|---|
+| `domain` / `title` | 域与角色名（`title` 为空时用「<domain>协作助手」） |
+| `identity` | 一段"你是谁"的定位（≤400 字） |
+| `sharedMemoryNote` | 是否输出「所有会话共享同一份记忆、不要把不同对象记录互相套用」（多患者场景建议开，默认 `true`） |
+| `expertise` / `habits` / `preferences` | 用户画像：擅长 / 习惯 / 偏好（各 ≤6 条） |
+| `rules` | 专业规范（≤12 条） |
+| `redlines` | 红线（≤12 条）：违反就不要给答案。**注入预算不够时也不丢** |
+| `referrals` | 必须转人工 / 线下确认的情形（≤8 条）；标题是通用的，不写行业专用词 |
+| `uncertainty` | 不确定时的策略（≤4 条；为空时给默认"先问、给依据、不编造"） |
+
+注入顺序（两段）：`dsh-brain:role`（静态，order 90）→ `dsh-brain:context`（动态，order 100）。
+`/brain profile` 打印的就是前一端的**原文**。
 
 ## 存储：SQLite（v1.1.0 起）
 
@@ -386,10 +421,18 @@ surface 替换（`session.append(..., { surfaceOp:{op:'replace', startSeq, endSe
 | `persona_baseline(side, trait, value)` | 双向基线（`/brain reset` 后重置为配置基线） |
 | `collector_state(session_id, layer, last_seq, updated_at)` | 每层每会话的采集水位线；`PRIMARY KEY(session_id, layer)` |
 | `collector_pending(session_id, layer, user_text, seq, at)` | 等待助手回复的「用户消息」（v1.1.1 起）；插件重载/DSH 重启后仍可配对，不丢人类消息 |
+| `characters(id, name, emoji, definition, evidence_turns, last_evidence_seq, version, source, updated_at, created_at)` | 角色（v2.2.0）：模型从对话写出的「我是谁」；`version`=0 表示还没 bootstrap |
+| `character_versions(character_id, version, definition, reason, evidence_turns, created_at)` | 角色定义历史（只增不改）：每一版是谁、因为什么（bootstrap / revise） |
+| `entities(id, kind, name, aliases, attrs, source, created_at, updated_at)` | 实体（v2.2.0 建表，v2.3.0 接逻辑）：患者/客户/项目…跨会话对象档案 |
+| `entity_facts(id, entity_id, kind, text, at, turn_id, session_id, created_at)` | 实体事实：挂到具体对象上的带时间要点 |
+| `entity_turns(entity_id, turn_id, at, session_id)` | 实体 ↔ 轮次：对象最近聊过什么、原文溯源 |
+| `wm_state(session_id, kind, data, updated_at)` | 表意识槽位（v2.3.0）：「眼下在说谁」的实体 id + 时间，带 TTL |
 
 索引：`memory_turns(at)`、`memory_turns(session_id)`、`memory_facts(side, kind, weight)`、
 `memory_episodes(at DESC)`、`memory_episodes(session_id)`、`memory_episodes(salience DESC)`、
-`mood_history(side, at DESC)`、`collector_state(updated_at)`。
+`mood_history(side, at DESC)`、`collector_state(updated_at)`、
+`character_versions(created_at DESC)`、`entities(kind, name)`、
+`entity_facts(entity_id, at DESC)`、`entity_turns(entity_id, at DESC)`。
 
 schema 版本：v1.0.0→1（JSON 迁移）、v1.1.0→2（SQLite）、**v1.2.0→3**（`memory_episodes` 表 +
 `memory_turns.consolidated` 列）。升级是幂等的：`CREATE TABLE IF NOT EXISTS` + `PRAGMA
